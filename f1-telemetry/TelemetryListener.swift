@@ -61,10 +61,13 @@ class TelemetryListener: ObservableObject {
             }
             
             listener?.newConnectionHandler = { [weak self] connection in
+                print("🆕 New connection handler triggered! Endpoint: \(connection.endpoint)")
                 self?.handleConnection(connection)
             }
             
+            print("▶️ Starting NWListener on queue...")
             listener?.start(queue: queue)
+            print("✅ NWListener start() called")
             
         } catch {
             DispatchQueue.main.async {
@@ -83,12 +86,18 @@ class TelemetryListener: ObservableObject {
     }
     
     private func handleConnection(_ connection: NWConnection) {
+        print("🔗 New connection established from: \(String(describing: connection.endpoint))")
+        
         connection.stateUpdateHandler = { state in
             switch state {
             case .ready:
                 print("📡 Connection ready from \(String(describing: connection.endpoint))")
             case .failed(let error):
                 print("❌ Connection failed: \(error)")
+            case .waiting(let error):
+                print("⏳ Connection waiting: \(error)")
+            case .cancelled:
+                print("🛑 Connection cancelled")
             default:
                 break
             }
@@ -99,8 +108,12 @@ class TelemetryListener: ObservableObject {
     }
     
     private func receiveData(on connection: NWConnection) {
+        print("👂 Setting up receiveMessage handler on connection")
         connection.receiveMessage { [weak self] data, context, isComplete, error in
-            guard let self = self else { return }
+            guard let self = self else {
+                print("❌ Self is nil in receiveMessage")
+                return
+            }
             
             if let error = error {
                 print("❌ Receive error: \(error)")
@@ -108,17 +121,24 @@ class TelemetryListener: ObservableObject {
             }
             
             if let data = data, !data.isEmpty {
+                print("📨 Received data packet: \(data.count) bytes")
                 self.handlePacket(data)
                 
                 DispatchQueue.main.async {
                     self.packetsReceived += 1
+                    
+                    // Log every 100 packets to show activity
+                    if self.packetsReceived % 100 == 0 {
+                        print("📦 Received \(self.packetsReceived) packets so far...")
+                    }
                 }
+            } else {
+                print("⚠️ Received empty or nil data - isComplete: \(isComplete)")
             }
             
-            // Continue receiving
-            if !isComplete {
-                self.receiveData(on: connection)
-            }
+            // UDP datagrams are always "complete" individually, but we want to keep receiving
+            // Always continue receiving for UDP connections
+            self.receiveData(on: connection)
         }
     }
     
@@ -133,8 +153,19 @@ class TelemetryListener: ObservableObject {
         
         // Verify packet format
         guard header.packetFormat == 2024 else {
-            print("⚠️ Unknown packet format: \(header.packetFormat)")
+            print("⚠️ Unknown packet format: \(header.packetFormat) (expected 2024)")
             return
+        }
+        
+        // Log first successful packet parsing
+        if packetsReceived == 0 {
+            print("✅ First valid F1 2024 packet received!")
+            print("📋 Packet Header Info:")
+            print("   Session UID: \(header.sessionUID)")
+            print("   Session Time: \(header.sessionTime)s")
+            print("   Frame: \(header.frameIdentifier)")
+            print("   Overall Frame: \(header.overallFrameIdentifier)")
+            print("   Player Car Index: \(header.playerCarIndex)")
         }
         
         // Route to appropriate parser based on packet ID
@@ -143,25 +174,70 @@ class TelemetryListener: ObservableObject {
             return
         }
         
+        // Log packet type distribution every 50 packets
+        if packetsReceived % 50 == 0 && packetsReceived > 0 {
+            print("📊 Packet received: \(getPacketTypeName(packetType)) (ID: \(header.packetId))")
+        }
+        
         switch packetType {
         case .carTelemetry:
+            print("🚗 Car Telemetry packet received (size: \(data.count) bytes)")
             if let packet = PacketCarTelemetryData(data: data) {
+                print("✅ Car Telemetry packet parsed successfully")
+                print("   Callback is nil? \(onTelemetryReceived == nil)")
                 onTelemetryReceived?(packet)
+                print("   Callback invoked")
+            } else {
+                print("❌ Failed to parse Car Telemetry packet - data size: \(data.count), expected minimum: \(PacketHeader.size + CarTelemetryData.size * 22 + 3)")
             }
             
         case .lapData:
+            print("🏁 Lap Data packet received (size: \(data.count) bytes)")
             if let packet = PacketLapData(data: data) {
+                print("✅ Lap Data packet parsed successfully")
+                print("   Callback is nil? \(onLapDataReceived == nil)")
                 onLapDataReceived?(packet)
+                print("   Callback invoked")
+            } else {
+                print("❌ Failed to parse Lap Data packet - data size: \(data.count), expected minimum: \(PacketHeader.size + LapData.size * 22 + 2)")
             }
             
         case .carStatus:
+            print("📊 Car Status packet received (size: \(data.count) bytes)")
             if let packet = PacketCarStatusData(data: data) {
+                print("✅ Car Status packet parsed successfully")
+                print("   Callback is nil? \(onCarStatusReceived == nil)")
                 onCarStatusReceived?(packet)
+                print("   Callback invoked")
+            } else {
+                print("❌ Failed to parse Car Status packet - data size: \(data.count), expected minimum: \(PacketHeader.size + CarStatusData.size * 22)")
             }
             
         default:
-            // We can add more packet types as needed
+            // Log other packet types we're receiving but not processing
+            if packetsReceived % 100 == 0 {
+                print("📦 Received \(getPacketTypeName(packetType)) packet (not processed)")
+            }
             break
+        }
+    }
+    
+    private func getPacketTypeName(_ type: PacketType) -> String {
+        switch type {
+        case .motion: return "Motion"
+        case .session: return "Session"
+        case .lapData: return "Lap Data"
+        case .event: return "Event"
+        case .participants: return "Participants"
+        case .carSetups: return "Car Setups"
+        case .carTelemetry: return "Car Telemetry"
+        case .carStatus: return "Car Status"
+        case .finalClassification: return "Final Classification"
+        case .lobbyInfo: return "Lobby Info"
+        case .carDamage: return "Car Damage"
+        case .sessionHistory: return "Session History"
+        case .tyreSets: return "Tyre Sets"
+        case .motionEx: return "Motion Ex"
         }
     }
     

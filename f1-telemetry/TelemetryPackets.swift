@@ -288,7 +288,8 @@ struct CarStatusData {
     var ersDeployedThisLap: Float       // ERS energy deployed this lap
     var networkPaused: UInt8            // Whether the car is paused in a network game
     
-    static let size = 58
+    // Total size: 5×UInt8(5) + 3×UInt16(6) + 1×Int8(1) + 9×Float(36) + 1×UInt8(1) = 55 bytes
+    static let size = 55
     
     init(data: Data, offset: inout Int) {
         func read<T>(_ type: T.Type) -> T {
