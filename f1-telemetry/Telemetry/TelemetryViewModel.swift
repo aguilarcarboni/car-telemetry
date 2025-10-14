@@ -48,28 +48,19 @@ class TelemetryViewModel: ObservableObject {
     @Published var tyreTempFR: Double = 0
     @Published var tyreTempRL: Double = 0
     @Published var tyreTempRR: Double = 0
-    // New: Inner tyre temperatures
+
+    // Inner tyre temperatures
     @Published var tyreInnerTempFL: Double = 0
     @Published var tyreInnerTempFR: Double = 0
     @Published var tyreInnerTempRL: Double = 0
     @Published var tyreInnerTempRR: Double = 0
-    // New: Brake temperatures
+
+    // Brake temperatures
     @Published var brakeTempFL: Double = 0
     @Published var brakeTempFR: Double = 0
     @Published var brakeTempRL: Double = 0
     @Published var brakeTempRR: Double = 0
-    
-    // Lap Data
-    @Published var currentLap: Int = 0
-    @Published var position: Int = 0
-    @Published var lastLapTime: String = "--:--.---"
-    @Published var currentLapTime: String = "--:--.---"
-    @Published var sector1Time: String = "--:--.---"
-    @Published var sector2Time: String = "--:--.---"
-    @Published var deltaToLeader: String = "+0.000"
-    @Published var deltaToFront: String = "+0.000"
-    @Published var lapDistance: Double = 0
-    
+
     // Car Status
     @Published var fuelInTank: Double = 0
     @Published var fuelCapacity: Double = 110
@@ -78,30 +69,7 @@ class TelemetryViewModel: ObservableObject {
     @Published var tyreAge: Int = 0
     @Published var ersStoreEnergy: Double = 0
     @Published var ersDeployMode: String = "None"
-    
-    // Connection Status
-    @Published var isConnected: Bool = false
-    @Published var packetsReceived: Int = 0
-    @Published var lastUpdateTime: Date = Date()
-    @Published var localIPAddress: String = "Fetching..."
-    @Published var port: UInt16 = 20777
-    // Player
-    @Published var playerCarIndex: Int = 0
-    // Session Identifiers
-    @Published var sessionUID: String = "No session"
-    // Session Info
-    @Published var weather: UInt8 = 0 // 0 = clear
-    @Published var trackTemp: Int = 0
-    @Published var airTemp: Int = 0
-    @Published var totalLapsSession: Int = 0
-    @Published var timeLeft: Int = 0
-    @Published var trackId: Int8 = -1
-    @Published var sessionType: UInt8 = 0
-    @Published var trackLength: Int = 0
 
-    // Weather forecast (next 5 samples)
-    // Holds up to 5 upcoming weather forecast samples (time offset + weather code)
-    @Published var weatherForecastNext: [WeatherForecastSample] = []
     // Motion (player car)
     @Published var gLat: Double = 0
     @Published var gLong: Double = 0
@@ -109,17 +77,14 @@ class TelemetryViewModel: ObservableObject {
     @Published var yaw: Double = 0
     @Published var pitch: Double = 0
     @Published var roll: Double = 0
+
     // World position (player car)
-    @Published var worldX: Double = 0 // F1 world X (metres)
-    @Published var worldZ: Double = 0 // F1 world Z (metres)
+    @Published var worldX: Double = 0
+    @Published var worldZ: Double = 0
     @Published var minWorldX: Double = Double.greatestFiniteMagnitude
     @Published var maxWorldX: Double = -Double.greatestFiniteMagnitude
     @Published var minWorldZ: Double = Double.greatestFiniteMagnitude
     @Published var maxWorldZ: Double = -Double.greatestFiniteMagnitude
-    
-    // Participants
-    @Published var participants: [ParticipantData] = []
-    @Published var activeCars: Int = 0
 
     // Damage (player car)
     @Published var tyreWear: [Float] = [0,0,0,0]
@@ -133,12 +98,55 @@ class TelemetryViewModel: ObservableObject {
     @Published var gearBoxDamage: Int = 0
     @Published var engineDamagePercent: Int = 0
     @Published var lastPacketTimestamp: String = "00:00:00.000"
+    
+    // Lap Data
+    @Published var currentLap: Int = 0
+    @Published var position: Int = 0
+    @Published var lastLapTime: String = "--:--.---"
+    @Published var currentLapTime: String = "--:--.---"
+    @Published var sector1Time: String = "--:--.---"
+    @Published var sector2Time: String = "--:--.---"
+    @Published var deltaToLeader: String = "+0.000"
+    @Published var deltaToFront: String = "+0.000"
+    @Published var lapDistance: Double = 0
+    
+    // Connection Status
+    @Published var isConnected: Bool = false
+    @Published var packetsReceived: Int = 0
+    @Published var lastUpdateTime: Date = Date()
+    @Published var localIPAddress: String = "Fetching..."
+    @Published var port: UInt16 = 20777
+
+    // Player
+    @Published var playerCarIndex: Int = 0
+
+    // Session Identifiers
+    @Published var sessionUID: String = "No session"
+
+    // Session Info
+    @Published var weather: UInt8 = 0 // 0 = clear
+    @Published var trackTemp: Int = 0
+    @Published var airTemp: Int = 0
+    @Published var totalLapsSession: Int = 0
+    @Published var timeLeft: Int = 0
+    @Published var trackId: Int8 = -1
+    @Published var sessionType: UInt8 = 0
+    @Published var trackLength: Int = 0
+
+    // Weather forecast (next 5 samples)
+    @Published var weatherForecastNext: [UInt8] = []
+    
+    // Participants
+    @Published var participants: [ParticipantData] = []
+    @Published var activeCars: Int = 0
 
     // Loading
-    
     private let telemetryListener: TelemetryListener
     private var connectionCheckTimer: Timer?
     private let context: ModelContext
+    
+    // Keep track of sessions already stored to avoid duplicate inserts
+    private var persistedSessions: Set<UInt64> = []
     
     init(port: UInt16 = 20777, context: ModelContext? = nil) {
         print("🏁 TelemetryViewModel initializing...")
@@ -220,7 +228,7 @@ class TelemetryViewModel: ObservableObject {
                     print("   Speed: \(telemetry.speed) km/h, Gear: \(telemetry.gear), RPM: \(telemetry.engineRPM)")
                 }
                 
-                print("✅ UI update complete - Speed: \(self.speed), Gear: \(self.gear)")
+                print("✅ UI update complete")
                 self.objectWillChange.send()
             }
         }
@@ -238,9 +246,8 @@ class TelemetryViewModel: ObservableObject {
                 print("❌ Player index out of bounds!")
                 return
             }
-            
+
             let lapData = packet.lapData[playerIndex]
-            self.persistLapSummary(lapData, header: packet.header)
             
             DispatchQueue.main.async {
                 print("🔄 Updating UI with lap data...")
@@ -280,6 +287,7 @@ class TelemetryViewModel: ObservableObject {
                 if previousLap > 0 && self.currentLap != previousLap {
                     print("🏁 Lap \(previousLap) completed! Last lap time: \(self.lastLapTime)")
                     print("   Now on lap \(self.currentLap), Position: P\(self.position)")
+                    self.persistLapSummary(lapData, header: packet.header)
                 }
                 
                 print("✅ UI update complete - Lap: \(self.currentLap), Position: P\(self.position)")
@@ -346,7 +354,7 @@ class TelemetryViewModel: ObservableObject {
                 // Update weather forecast samples
                 if !packet.weatherForecastSamples.isEmpty {
                     // Take first 5 samples
-                    self.weatherForecastNext = Array(packet.weatherForecastSamples.prefix(5))
+                    self.weatherForecastNext = packet.weatherForecastSamples.prefix(5).map { $0.weather }
                 }
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
@@ -405,7 +413,6 @@ class TelemetryViewModel: ObservableObject {
     }
     
     // MARK: - Public Methods
-    
     func startListening() {
         print("🚀 Starting telemetry listener...")
         print("📡 Listening on port \(port)")
@@ -419,7 +426,6 @@ class TelemetryViewModel: ObservableObject {
     }
     
     // MARK: - Private Helpers
-    
     private func startConnectionMonitoring() {
         connectionCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
@@ -442,6 +448,7 @@ class TelemetryViewModel: ObservableObject {
         }
     }
     
+    // MARK: - Formatting
     private func formatLapTime(_ milliseconds: UInt32) -> String {
         guard milliseconds > 0 else { return "--:--.---" }
         
@@ -482,7 +489,8 @@ class TelemetryViewModel: ObservableObject {
         default: return "Unknown"
         }
     }
-    
+
+    // MARK: - Session Info
     private func updateSessionInfo(from header: PacketHeader) {
         // Update player car index
         playerCarIndex = Int(header.playerCarIndex)
@@ -515,6 +523,7 @@ class TelemetryViewModel: ObservableObject {
     private func persistSessionIfNeeded(header: PacketHeader) {
         guard header.sessionUID != 0 else { return }
         let uid = header.sessionUID
+        if persistedSessions.contains(uid) { return }
         do {
             let fetch = FetchDescriptor<RaceSession>(predicate: #Predicate { $0.sessionUID == uid })
             let results = try context.fetch(fetch)
@@ -522,31 +531,12 @@ class TelemetryViewModel: ObservableObject {
                 let session = RaceSession(sessionUID: uid, sessionType: Int16(sessionType), trackId: Int16(trackId))
                 context.insert(session)
                 try context.save()
+                persistedSessions.insert(uid)
+            } else {
+                persistedSessions.insert(uid)
             }
         } catch {
             print("❌ Failed to persist session: \(error)")
-        }
-    }
-    private func persistLapSummary(_ lapData: LapData, header: PacketHeader) {
-        guard header.sessionUID != 0 else { return }
-        let uid = header.sessionUID
-        do {
-            let fetch = FetchDescriptor<RaceSession>(predicate: #Predicate { $0.sessionUID == uid })
-            if var session = try context.fetch(fetch).first {
-
-                let sector1 = Int32(lapData.sector1TimeInMS)
-                let sector2 = Int32(lapData.sector2TimeInMS)
-                let total = Int32(lapData.lastLapTimeInMS)
-                let sector3 = max(0, total - sector1 - sector2)
-                let isValid = lapData.currentLapInvalid == 0
-
-                let summary = LapSummary(session: session, vehicleIndex: Int16(header.playerCarIndex), lapNumber: Int16(lapData.currentLapNum), lapTimeMS: total, s1: sector1, s2: sector2, s3: sector3, valid: isValid)
-                if session.lapSummaries == nil { session.lapSummaries = [] }
-                session.lapSummaries?.append(summary)
-                try context.save()
-            }
-        } catch {
-            print("❌ Failed to persist lap summary: \(error)")
         }
     }
     
@@ -626,11 +616,61 @@ class TelemetryViewModel: ObservableObject {
             }
         }
     }
+
+    // Lap Summary
+    private func persistLapSummary(_ lapData: LapData, header: PacketHeader) {
+        // Ensure we have a valid session UID
+        guard header.sessionUID != 0 else { return }
+        let uid = header.sessionUID
+        
+        // 1. Fetch (or create) the RaceSession for this session UID so we can relate the lap summary.
+        var session: RaceSession?
+        do {
+            let fetch = FetchDescriptor<RaceSession>(predicate: #Predicate { $0.sessionUID == uid })
+            session = try context.fetch(fetch).first
+        } catch {
+            print("⚠️ Failed to fetch RaceSession for UID \(uid): \(error)")
+        }
+        
+        // If the session does not yet exist, create and insert it so we always have a parent object.
+        if session == nil {
+            session = RaceSession(sessionUID: uid,
+                                  sessionType: Int16(self.sessionType),
+                                  trackId: Int16(self.trackId))
+            context.insert(session!)
+        }
+        guard let session = session else { return }
+        
+        // 2. Build LapSummary from the supplied LapData
+        let s1 = Int32(lapData.sector1TimeInMS)
+        let s2 = Int32(lapData.sector2TimeInMS)
+        let lapTime = Int32(lapData.lastLapTimeInMS)
+        let s3 = lapTime - s1 - s2
+        let completedLapNumber = Int16(lapData.currentLapNum) - 1 // previous lap just completed
+        let summary = LapSummary(session: session,
+                                 vehicleIndex: Int16(header.playerCarIndex),
+                                 lapNumber: completedLapNumber,
+                                 lapTimeMS: lapTime,
+                                 s1: s1,
+                                 s2: s2,
+                                 s3: s3,
+                                 valid: lapData.currentLapInvalid == 0)
+        
+        // 3. Persist
+        context.insert(summary)
+        do {
+            try context.save()
+            print("💾 Saved LapSummary for lap #\(completedLapNumber) (UID: \(uid))")
+        } catch {
+            print("❌ Failed saving LapSummary: \(error)")
+        }
+    }
     
     deinit {
         connectionCheckTimer?.invalidate()
+        let listener = telemetryListener
         Task { @MainActor in
-            stopListening()
+            listener.stopListening()
         }
     }
 }

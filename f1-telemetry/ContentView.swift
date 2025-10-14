@@ -41,8 +41,23 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 50)
             }
-            Tab("Sessions", systemImage: "clock") {
-                SessionsView()
+            Tab("Race", systemImage: "flag.checkered") {
+                VStack(spacing: 12) {
+                    HStack(spacing: 12) {
+                        WeatherView(viewModel: viewModel)
+                        InfoTile(title: "Fuel", value: "\(String(format: "%.1f", viewModel.fuelRemainingLaps)) laps", color: .orange)
+                    }
+                    HStack(spacing: 12) {
+                        TemperaturesView(viewModel: viewModel)
+                        TyresView(viewModel: viewModel)
+                    }
+                    HStack(spacing: 12) {
+                        LapInfoView(viewModel: viewModel)
+                        DamageView(viewModel: viewModel)
+                    }
+
+                }
+                .padding(.horizontal, 50)
             }
             Tab("Track", systemImage: "map") {
                 HStack() {
@@ -56,6 +71,9 @@ struct ContentView: View {
                         .background(Color.white.opacity(0.05))
                         .cornerRadius(12)
                 }
+            }
+            Tab("Sessions", systemImage: "clock") {
+                SessionsView()
             }
             Tab("Settings", systemImage: "gearshape") {
                 SettingsView(viewModel: viewModel)

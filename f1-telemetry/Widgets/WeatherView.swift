@@ -22,17 +22,13 @@ struct WeatherView: View {
     var WeatherForecast: some View {
         HStack(spacing: 12) {
             ForEach(0..<min(viewModel.weatherForecastNext.count, 5), id: \.self) { idx in
-                let sample = viewModel.weatherForecastNext[idx]
-                let wCode = sample.weather
+                let wCode = viewModel.weatherForecastNext[idx]
                 let icon = wCode < weatherIconMap.count ? weatherIconMap[Int(wCode)].icon : "questionmark"
                 let color = wCode < weatherIconMap.count ? weatherIconMap[Int(wCode)].color : .blue
                 VStack(spacing: 4) {
                     Image(systemName: icon)
                         .foregroundColor(color)
                         .font(.title)
-                    Text("+\(sample.timeOffset)′")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
                 }
             }
         }
