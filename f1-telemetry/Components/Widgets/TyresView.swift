@@ -26,12 +26,12 @@ struct TyresView: View {
             Divider()
                 .background(Color.white.opacity(0.2))
             // Four wheels wear & damage
-            VStack(spacing: 20) {
-                HStack(spacing: 20) {
+            VStack(spacing: 50) {
+                HStack(spacing: 50) {
                     wheelDamageView(wear: viewModel.tyreWearFL)
                     wheelDamageView(wear: viewModel.tyreWearFR)
                 }
-                HStack(spacing: 20) {
+                HStack(spacing: 50) {
                     wheelDamageView(wear: viewModel.tyreWearRL)
                     wheelDamageView(wear: viewModel.tyreWearRR)
                 }

@@ -41,6 +41,9 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 50)
             }
+            Tab("Sessions", systemImage: "clock") {
+                SessionsView()
+            }
             Tab("Track", systemImage: "map") {
                 HStack() {
 

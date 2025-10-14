@@ -6,12 +6,15 @@
 //
 
 import SwiftUI
+import SwiftData
 
 @main
 struct f1_telemetryApp: App {
+    private let persistence = PersistenceController.shared
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .modelContainer(persistence.modelContainer)
         }
     }
 }

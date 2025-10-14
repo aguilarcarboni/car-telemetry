@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import SwiftData
 
 // MARK: - Safe Conversion Extension
 extension Double {
@@ -25,6 +26,7 @@ extension Double {
     }
 }
 
+@MainActor
 class TelemetryViewModel: ObservableObject {
     // MARK: - Published Properties
     
@@ -136,9 +138,11 @@ class TelemetryViewModel: ObservableObject {
     
     private let telemetryListener: TelemetryListener
     private var connectionCheckTimer: Timer?
+    private let context: ModelContext
     
-    init(port: UInt16 = 20777) {
+    init(port: UInt16 = 20777, context: ModelContext? = nil) {
         print("🏁 TelemetryViewModel initializing...")
+        self.context = context ?? PersistenceController.shared.modelContainer.mainContext
         self.port = port
         telemetryListener = TelemetryListener(port: port)
         setupCallbacks()
@@ -236,6 +240,7 @@ class TelemetryViewModel: ObservableObject {
             }
             
             let lapData = packet.lapData[playerIndex]
+            self.persistLapSummary(lapData, header: packet.header)
             
             DispatchQueue.main.async {
                 print("🔄 Updating UI with lap data...")
@@ -345,6 +350,7 @@ class TelemetryViewModel: ObservableObject {
                 }
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
+                self.persistSessionIfNeeded(header: packet.header)
             }
         }
 
@@ -506,6 +512,44 @@ class TelemetryViewModel: ObservableObject {
         lastPacketTimestamp = String(format: "%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds)
     }
     
+    private func persistSessionIfNeeded(header: PacketHeader) {
+        guard header.sessionUID != 0 else { return }
+        let uid = header.sessionUID
+        do {
+            let fetch = FetchDescriptor<RaceSession>(predicate: #Predicate { $0.sessionUID == uid })
+            let results = try context.fetch(fetch)
+            if results.isEmpty {
+                let session = RaceSession(sessionUID: uid, sessionType: Int16(sessionType), trackId: Int16(trackId))
+                context.insert(session)
+                try context.save()
+            }
+        } catch {
+            print("❌ Failed to persist session: \(error)")
+        }
+    }
+    private func persistLapSummary(_ lapData: LapData, header: PacketHeader) {
+        guard header.sessionUID != 0 else { return }
+        let uid = header.sessionUID
+        do {
+            let fetch = FetchDescriptor<RaceSession>(predicate: #Predicate { $0.sessionUID == uid })
+            if var session = try context.fetch(fetch).first {
+
+                let sector1 = Int32(lapData.sector1TimeInMS)
+                let sector2 = Int32(lapData.sector2TimeInMS)
+                let total = Int32(lapData.lastLapTimeInMS)
+                let sector3 = max(0, total - sector1 - sector2)
+                let isValid = lapData.currentLapInvalid == 0
+
+                let summary = LapSummary(session: session, vehicleIndex: Int16(header.playerCarIndex), lapNumber: Int16(lapData.currentLapNum), lapTimeMS: total, s1: sector1, s2: sector2, s3: sector3, valid: isValid)
+                if session.lapSummaries == nil { session.lapSummaries = [] }
+                session.lapSummaries?.append(summary)
+                try context.save()
+            }
+        } catch {
+            print("❌ Failed to persist lap summary: \(error)")
+        }
+    }
+    
     private func getLocalIPAddress() {
         DispatchQueue.global(qos: .background).async { [weak self] in
             var address: String = "Unable to get IP"
@@ -585,7 +629,9 @@ class TelemetryViewModel: ObservableObject {
     
     deinit {
         connectionCheckTimer?.invalidate()
-        stopListening()
+        Task { @MainActor in
+            stopListening()
+        }
     }
 }
 
