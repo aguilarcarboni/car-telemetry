@@ -35,10 +35,10 @@ struct LapInfoView: View {
                 .background(Color.white.opacity(0.2))
             
             VStack(spacing: 8) {
+                lapTimeItem(title: "Sector 1", time: viewModel.sector1Time)
+                lapTimeItem(title: "Sector 2", time: viewModel.sector2Time)
+                lapTimeItem(title: "Last", time: viewModel.lastLapTime, color: .green)
                 lapTimeItem(title: "Current", time: viewModel.currentLapTime, color: .blue)
-                lapTimeItem(title: "Last Lap", time: viewModel.lastLapTime, color: .green)
-                lapTimeItem(title: "Sector 1", time: viewModel.sector1Time, color: .purple)
-                lapTimeItem(title: "Sector 2", time: viewModel.sector2Time, color: .orange)
             }
             
             Divider()
@@ -46,29 +46,29 @@ struct LapInfoView: View {
             
             VStack(spacing: 6) {
                 HStack {
+                    Image(systemName: "arrowtriangle.up.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.yellow)
+                    Text("Delta Front")
+                        .font(.system(size: 10))
+                        .foregroundColor(.gray)
+                    Spacer()
+                    Text(viewModel.deltaToFront)
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundColor(.yellow)
+                }
+
+                HStack {
                     Image(systemName: "flag.checkered")
                         .font(.system(size: 10))
                         .foregroundColor(.yellow)
-                    Text("Delta")
+                    Text("Delta Leader")
                         .font(.system(size: 10))
                         .foregroundColor(.gray)
                     Spacer()
                     Text(viewModel.deltaToLeader)
                         .font(.system(size: 14, weight: .bold, design: .monospaced))
                         .foregroundColor(.yellow)
-                }
-                
-                HStack {
-                    Image(systemName: "road.lanes")
-                        .font(.system(size: 10))
-                        .foregroundColor(.blue)
-                    Text("Distance")
-                        .font(.system(size: 10))
-                        .foregroundColor(.gray)
-                    Spacer()
-                    Text("\(viewModel.lapDistance.safeInt()) m")
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white)
                 }
             }
         }
@@ -77,7 +77,7 @@ struct LapInfoView: View {
         .cornerRadius(12)
     }
     
-    private func lapTimeItem(title: String, time: String, color: Color) -> some View {
+    private func lapTimeItem(title: String, time: String, color: Color? = .white) -> some View {
         HStack {
             Text(title)
                 .font(.system(size: 10, weight: .medium))

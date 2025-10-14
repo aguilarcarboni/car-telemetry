@@ -22,6 +22,10 @@ class TelemetryListener: ObservableObject {
     var onTelemetryReceived: ((PacketCarTelemetryData) -> Void)?
     var onLapDataReceived: ((PacketLapData) -> Void)?
     var onCarStatusReceived: ((PacketCarStatusData) -> Void)?
+    var onSessionReceived: ((PacketSessionData) -> Void)?
+    var onMotionReceived: ((PacketMotionData) -> Void)?
+    var onParticipantsReceived: ((PacketParticipantsData) -> Void)?
+    var onDamageReceived: ((PacketCarDamageData) -> Void)?
     
     init(port: UInt16 = 20777) {
         self.port = port
@@ -213,6 +217,22 @@ class TelemetryListener: ObservableObject {
                 print("❌ Failed to parse Car Status packet - data size: \(data.count), expected minimum: \(PacketHeader.size + CarStatusData.size * 22)")
             }
             
+        case .session:
+            if let packet = PacketSessionData(data: data) {
+                onSessionReceived?(packet)
+            }
+        case .motion:
+            if let packet = PacketMotionData(data: data) {
+                onMotionReceived?(packet)
+            }
+        case .participants:
+            if let packet = PacketParticipantsData(data: data) {
+                onParticipantsReceived?(packet)
+            }
+        case .carDamage:
+            if let packet = PacketCarDamageData(data: data) {
+                onDamageReceived?(packet)
+            }
         default:
             // Log other packet types we're receiving but not processing
             if packetsReceived % 100 == 0 {
@@ -238,6 +258,7 @@ class TelemetryListener: ObservableObject {
         case .sessionHistory: return "Session History"
         case .tyreSets: return "Tyre Sets"
         case .motionEx: return "Motion Ex"
+        case .timeTrial: return "Time Trial"
         }
     }
     

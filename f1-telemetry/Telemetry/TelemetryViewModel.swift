@@ -35,6 +35,7 @@ class TelemetryViewModel: ObservableObject {
     @Published var maxRPM: Double = 15000
     @Published var throttle: Double = 0
     @Published var brake: Double = 0
+    @Published var clutch: UInt8 = 0
     @Published var steer: Double = 0
     @Published var drsActive: Bool = false
     @Published var drsAvailable: Bool = false
@@ -45,6 +46,16 @@ class TelemetryViewModel: ObservableObject {
     @Published var tyreTempFR: Double = 0
     @Published var tyreTempRL: Double = 0
     @Published var tyreTempRR: Double = 0
+    // New: Inner tyre temperatures
+    @Published var tyreInnerTempFL: Double = 0
+    @Published var tyreInnerTempFR: Double = 0
+    @Published var tyreInnerTempRL: Double = 0
+    @Published var tyreInnerTempRR: Double = 0
+    // New: Brake temperatures
+    @Published var brakeTempFL: Double = 0
+    @Published var brakeTempFR: Double = 0
+    @Published var brakeTempRL: Double = 0
+    @Published var brakeTempRR: Double = 0
     
     // Lap Data
     @Published var currentLap: Int = 0
@@ -54,6 +65,7 @@ class TelemetryViewModel: ObservableObject {
     @Published var sector1Time: String = "--:--.---"
     @Published var sector2Time: String = "--:--.---"
     @Published var deltaToLeader: String = "+0.000"
+    @Published var deltaToFront: String = "+0.000"
     @Published var lapDistance: Double = 0
     
     // Car Status
@@ -71,8 +83,56 @@ class TelemetryViewModel: ObservableObject {
     @Published var lastUpdateTime: Date = Date()
     @Published var localIPAddress: String = "Fetching..."
     @Published var port: UInt16 = 20777
+    // Player
+    @Published var playerCarIndex: Int = 0
+    // Session Identifiers
     @Published var sessionUID: String = "No session"
+    // Session Info
+    @Published var weather: UInt8 = 0 // 0 = clear
+    @Published var trackTemp: Int = 0
+    @Published var airTemp: Int = 0
+    @Published var totalLapsSession: Int = 0
+    @Published var timeLeft: Int = 0
+    @Published var trackId: Int8 = -1
+    @Published var sessionType: UInt8 = 0
+    @Published var trackLength: Int = 0
+
+    // Weather forecast (next 5 samples)
+    // Holds up to 5 upcoming weather forecast samples (time offset + weather code)
+    @Published var weatherForecastNext: [WeatherForecastSample] = []
+    // Motion (player car)
+    @Published var gLat: Double = 0
+    @Published var gLong: Double = 0
+    @Published var gVert: Double = 0
+    @Published var yaw: Double = 0
+    @Published var pitch: Double = 0
+    @Published var roll: Double = 0
+    // World position (player car)
+    @Published var worldX: Double = 0 // F1 world X (metres)
+    @Published var worldZ: Double = 0 // F1 world Z (metres)
+    @Published var minWorldX: Double = Double.greatestFiniteMagnitude
+    @Published var maxWorldX: Double = -Double.greatestFiniteMagnitude
+    @Published var minWorldZ: Double = Double.greatestFiniteMagnitude
+    @Published var maxWorldZ: Double = -Double.greatestFiniteMagnitude
+    
+    // Participants
+    @Published var participants: [ParticipantData] = []
+    @Published var activeCars: Int = 0
+
+    // Damage (player car)
+    @Published var tyreWear: [Float] = [0,0,0,0]
+    @Published var tyreDamage: [UInt8] = [0,0,0,0]
+    @Published var brakeDamage: [UInt8] = [0,0,0,0]
+    @Published var frontWingDamage: Int = 0
+    @Published var rearWingDamage: Int = 0
+    @Published var floorDamage: Int = 0
+    @Published var diffuserDamage: Int = 0
+    @Published var sidepodDamage: Int = 0
+    @Published var gearBoxDamage: Int = 0
+    @Published var engineDamagePercent: Int = 0
     @Published var lastPacketTimestamp: String = "00:00:00.000"
+
+    // Loading
     
     private let telemetryListener: TelemetryListener
     private var connectionCheckTimer: Timer?
@@ -115,6 +175,7 @@ class TelemetryViewModel: ObservableObject {
                 self.rpm = Double(telemetry.engineRPM)
                 self.throttle = Double(telemetry.throttle) * 100
                 self.brake = Double(telemetry.brake) * 100
+                self.clutch = UInt8(telemetry.clutch)
                 self.steer = Double(telemetry.steer)
                 self.drsActive = telemetry.drs == 1
                 self.engineTemp = Double(telemetry.engineTemperature)
@@ -125,6 +186,22 @@ class TelemetryViewModel: ObservableObject {
                     self.tyreTempRR = Double(telemetry.tyresSurfaceTemperature[1])
                     self.tyreTempFL = Double(telemetry.tyresSurfaceTemperature[2])
                     self.tyreTempFR = Double(telemetry.tyresSurfaceTemperature[3])
+
+                    // Inner tyre temps
+                    if telemetry.tyresInnerTemperature.count == 4 {
+                        self.tyreInnerTempRL = Double(telemetry.tyresInnerTemperature[0])
+                        self.tyreInnerTempRR = Double(telemetry.tyresInnerTemperature[1])
+                        self.tyreInnerTempFL = Double(telemetry.tyresInnerTemperature[2])
+                        self.tyreInnerTempFR = Double(telemetry.tyresInnerTemperature[3])
+                    }
+
+                    // Brake temps (celsius as UInt16)
+                    if telemetry.brakesTemperature.count == 4 {
+                        self.brakeTempRL = Double(telemetry.brakesTemperature[0])
+                        self.brakeTempRR = Double(telemetry.brakesTemperature[1])
+                        self.brakeTempFL = Double(telemetry.brakesTemperature[2])
+                        self.brakeTempFR = Double(telemetry.brakesTemperature[3])
+                    }
                 }
                 
                 self.lastUpdateTime = Date()
@@ -174,9 +251,22 @@ class TelemetryViewModel: ObservableObject {
                 self.sector2Time = self.formatSectorTime(lapData.sector2TimeInMS, minutes: lapData.sector2TimeMinutes)
                 
                 // Delta to leader
-                let deltaMS = Int(lapData.deltaToRaceLeaderInMS)
-                let deltaSeconds = Double(deltaMS) / 1000.0
-                self.deltaToLeader = String(format: "+%.3f", deltaSeconds)
+                let leaderTotalMs = Int(lapData.deltaToRaceLeaderMinutes) * 60000 + Int(lapData.deltaToRaceLeaderInMS)
+                let leaderSeconds = Double(leaderTotalMs) / 1000.0
+                if leaderTotalMs == 0 {
+                    self.deltaToLeader = "+0.000"
+                } else {
+                    self.deltaToLeader = String(format: "+%.3f", leaderSeconds)
+                }
+
+                // Delta to car in front
+                let frontTotalMs = Int(lapData.deltaToCarInFrontMinutes) * 60000 + Int(lapData.deltaToCarInFrontInMS)
+                let frontSeconds = Double(frontTotalMs) / 1000.0
+                if frontTotalMs == 0 {
+                    self.deltaToFront = "+0.000"
+                } else {
+                    self.deltaToFront = String(format: "+%.3f", frontSeconds)
+                }
                 
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
@@ -232,6 +322,78 @@ class TelemetryViewModel: ObservableObject {
                 
                 print("✅ UI update complete - Fuel: \(self.fuelInTank)kg, Tyres: \(self.tyreCompound)")
                 self.objectWillChange.send()
+            }
+        }
+
+        // Handle Session packets
+        telemetryListener.onSessionReceived = { [weak self] packet in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.weather = packet.weather
+                self.trackTemp = Int(packet.trackTemperature)
+                self.airTemp = Int(packet.airTemperature)
+                self.totalLapsSession = Int(packet.totalLaps)
+                self.timeLeft = Int(packet.timeLeft)
+                self.trackId = packet.trackId
+                self.trackLength = Int(packet.trackLength)
+                self.sessionType = packet.sessionType
+
+                // Update weather forecast samples
+                if !packet.weatherForecastSamples.isEmpty {
+                    // Take first 5 samples
+                    self.weatherForecastNext = Array(packet.weatherForecastSamples.prefix(5))
+                }
+                self.updateSessionInfo(from: packet.header)
+                self.updateLastPacketTimestamp()
+            }
+        }
+
+        // Handle Motion packets
+        telemetryListener.onMotionReceived = { [weak self] packet in
+            guard let self = self else { return }
+            let playerIndex = Int(packet.header.playerCarIndex)
+            guard playerIndex < packet.carMotionData.count else { return }
+            let m = packet.carMotionData[playerIndex]
+            DispatchQueue.main.async {
+                self.gLat = Double(m.gForceLateral)
+                self.gLong = Double(m.gForceLongitudinal)
+                self.gVert = Double(m.gForceVertical)
+                self.yaw = Double(m.yaw)
+                self.pitch = Double(m.pitch)
+                self.roll = Double(m.roll)
+                // Update world position
+                self.worldX = Double(m.worldPositionX)
+                self.worldZ = Double(m.worldPositionZ)
+                self.updateSessionInfo(from: packet.header)
+                self.updateLastPacketTimestamp()
+            }
+        }
+
+        // Participants
+        telemetryListener.onParticipantsReceived = { [weak self] packet in
+            DispatchQueue.main.async {
+                self?.activeCars = Int(packet.numActiveCars)
+                self?.participants = packet.participants
+            }
+        }
+
+        // Damage
+        telemetryListener.onDamageReceived = { [weak self] packet in
+            guard let self = self else { return }
+            let idx = Int(packet.header.playerCarIndex)
+            guard idx < packet.carDamageData.count else { return }
+            let dmg = packet.carDamageData[idx]
+            DispatchQueue.main.async {
+                self.tyreWear = dmg.tyresWear
+                self.tyreDamage = dmg.tyresDamage
+                self.brakeDamage = dmg.brakesDamage
+                self.frontWingDamage = Int(dmg.frontLeftWingDamage + dmg.frontRightWingDamage)/2
+                self.rearWingDamage = Int(dmg.rearWingDamage)
+                self.floorDamage = Int(dmg.floorDamage)
+                self.diffuserDamage = Int(dmg.diffuserDamage)
+                self.sidepodDamage = Int(dmg.sidepodDamage)
+                self.gearBoxDamage = Int(dmg.gearBoxDamage)
+                self.engineDamagePercent = Int(dmg.engineDamage)
             }
         }
     }
@@ -316,6 +478,8 @@ class TelemetryViewModel: ObservableObject {
     }
     
     private func updateSessionInfo(from header: PacketHeader) {
+        // Update player car index
+        playerCarIndex = Int(header.playerCarIndex)
         let newSessionUID = String(header.sessionUID)
         if sessionUID != newSessionUID && newSessionUID != "0" {
             if sessionUID != "No session" {
