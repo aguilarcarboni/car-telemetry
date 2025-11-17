@@ -10,6 +10,12 @@ import SwiftUI
 import Combine
 import SwiftData
 
+struct TelemetryPoint: Identifiable, Hashable {
+    let id = UUID()
+    let timestamp: Date
+    let value: Double
+}
+
 // MARK: - Safe Conversion Extension
 extension Double {
     func safeInt() -> Int {
@@ -28,6 +34,10 @@ extension Double {
 
 @MainActor
 class TelemetryViewModel: ObservableObject {
+    private let historyLimit = 160
+    // MARK: - Persistence Toggle
+    private let persistenceEnabled = false // Set to true to re-enable SwiftData saves
+    
     // MARK: - Published Properties
     
     // Car Telemetry
@@ -122,6 +132,13 @@ class TelemetryViewModel: ObservableObject {
 
     // Session Identifiers
     @Published var sessionUID: String = "No session"
+
+    // History buffers for dashboard charts
+    @Published private(set) var speedHistory: [TelemetryPoint] = []
+    @Published private(set) var throttleHistory: [TelemetryPoint] = []
+    @Published private(set) var brakeHistory: [TelemetryPoint] = []
+    @Published private(set) var lateralGHistory: [TelemetryPoint] = []
+    @Published private(set) var longitudinalGHistory: [TelemetryPoint] = []
 
     // Session Info
     @Published var weather: UInt8 = 0 // 0 = clear
@@ -221,6 +238,7 @@ class TelemetryViewModel: ObservableObject {
                 self.packetsReceived = self.telemetryListener.packetsReceived
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
+                self.recordInputSnapshot()
                 
                 // Log first packet received
                 if previousPackets == 0 && self.packetsReceived > 0 {
@@ -380,6 +398,7 @@ class TelemetryViewModel: ObservableObject {
                 self.worldZ = Double(m.worldPositionZ)
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
+                self.recordGForceSnapshot()
             }
         }
 
@@ -521,6 +540,7 @@ class TelemetryViewModel: ObservableObject {
     }
     
     private func persistSessionIfNeeded(header: PacketHeader) {
+        guard persistenceEnabled else { return }
         guard header.sessionUID != 0 else { return }
         let uid = header.sessionUID
         if persistedSessions.contains(uid) { return }
@@ -619,6 +639,7 @@ class TelemetryViewModel: ObservableObject {
 
     // Lap Summary
     private func persistLapSummary(_ lapData: LapData, header: PacketHeader) {
+        guard persistenceEnabled else { return }
         // Ensure we have a valid session UID
         guard header.sessionUID != 0 else { return }
         let uid = header.sessionUID
@@ -671,6 +692,30 @@ class TelemetryViewModel: ObservableObject {
         let listener = telemetryListener
         Task { @MainActor in
             listener.stopListening()
+        }
+    }
+}
+
+// MARK: - History helpers
+extension TelemetryViewModel {
+    private func recordInputSnapshot() {
+        let timestamp = Date()
+        appendHistory(&speedHistory, value: speed, timestamp: timestamp)
+        appendHistory(&throttleHistory, value: throttle, timestamp: timestamp)
+        appendHistory(&brakeHistory, value: brake, timestamp: timestamp)
+    }
+    
+    private func recordGForceSnapshot() {
+        let timestamp = Date()
+        appendHistory(&lateralGHistory, value: gLat, timestamp: timestamp)
+        appendHistory(&longitudinalGHistory, value: gLong, timestamp: timestamp)
+    }
+    
+    private func appendHistory(_ history: inout [TelemetryPoint], value: Double, timestamp: Date) {
+        guard !value.isNaN, !value.isInfinite else { return }
+        history.append(TelemetryPoint(timestamp: timestamp, value: value))
+        if history.count > historyLimit {
+            history.removeFirst(history.count - historyLimit)
         }
     }
 }

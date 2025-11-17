@@ -12,23 +12,15 @@ struct ContentView: View {
     
     var body: some View {
         TabView {
+            Tab("Dashboard", systemImage: "speedometer") {
+                ProDashboardView(viewModel: viewModel)
+            }
+            
             Tab("Overview", systemImage: "car.fill") {
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
                         SessionInfoView(viewModel: viewModel)
                         WeatherView(viewModel: viewModel)
-                        InfoTile(title: "Fuel", value: "\(String(format: "%.1f", viewModel.fuelRemainingLaps)) laps", color: .orange)
-                    }
-                    HStack(spacing: 12) {
-                        InfoTile(title: "Position", value: "\(viewModel.position)", color: .red)
-                        InfoTile(title: "DRS", value: "\(viewModel.drsActive ? "ON" : "OFF")", color: viewModel.drsActive ? .green : .red)
-                        InfoTile(title: "ERS - \(viewModel.ersDeployMode)", value: "\(String(format: "%.0f", viewModel.ersStoreEnergy / 40000)) %", color: .green)
-                        InfoTile(title: "Lap", value: "\(viewModel.currentLap)", color: .blue)
-                    }
-                    HStack(spacing: 12) {
-                        InfoTile(title: "Gear", value: gearDisplay, color: gearColor)
-                        InfoTile(title: "Speed", value: "\(viewModel.speed.safeInt())", color: .white)
-                        InfoTile(title: "RPM", color: rpmColor, content: AnyView(RPMBar))
                     }
                     InputsView(viewModel: viewModel)
                     HStack(spacing: 12) {
@@ -40,37 +32,6 @@ struct ContentView: View {
 
                 }
                 .padding(.horizontal, 50)
-            }
-            Tab("Race", systemImage: "flag.checkered") {
-                VStack(spacing: 12) {
-                    HStack(spacing: 12) {
-                        WeatherView(viewModel: viewModel)
-                        InfoTile(title: "Fuel", value: "\(String(format: "%.1f", viewModel.fuelRemainingLaps)) laps", color: .orange)
-                    }
-                    HStack(spacing: 12) {
-                        TemperaturesView(viewModel: viewModel)
-                        TyresView(viewModel: viewModel)
-                    }
-                    HStack(spacing: 12) {
-                        LapInfoView(viewModel: viewModel)
-                        DamageView(viewModel: viewModel)
-                    }
-
-                }
-                .padding(.horizontal, 50)
-            }
-            Tab("Track", systemImage: "map") {
-                HStack() {
-
-                    ParticipantsView(viewModel: viewModel)
-                        .frame(maxWidth: .infinity)
-
-                    MapView(viewModel: viewModel)
-                        .aspectRatio(1, contentMode: .fit)
-                        .frame(maxWidth: .infinity)
-                        .background(Color.white.opacity(0.05))
-                        .cornerRadius(12)
-                }
             }
             Tab("Sessions", systemImage: "clock") {
                 SessionsView()
