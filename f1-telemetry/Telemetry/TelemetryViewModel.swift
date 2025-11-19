@@ -444,6 +444,14 @@ class TelemetryViewModel: ObservableObject {
         telemetryListener.stopListening()
     }
     
+    func resetHistories() {
+        speedHistory.removeAll()
+        throttleHistory.removeAll()
+        brakeHistory.removeAll()
+        lateralGHistory.removeAll()
+        longitudinalGHistory.removeAll()
+    }
+    
     // MARK: - Private Helpers
     private func startConnectionMonitoring() {
         connectionCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in

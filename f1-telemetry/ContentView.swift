@@ -9,29 +9,12 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = TelemetryViewModel()
+    @StateObject private var themeManager = ThemeManager()
     
     var body: some View {
         TabView {
             Tab("Dashboard", systemImage: "speedometer") {
                 ProDashboardView(viewModel: viewModel)
-            }
-            
-            Tab("Overview", systemImage: "car.fill") {
-                VStack(spacing: 12) {
-                    HStack(spacing: 12) {
-                        SessionInfoView(viewModel: viewModel)
-                        WeatherView(viewModel: viewModel)
-                    }
-                    InputsView(viewModel: viewModel)
-                    HStack(spacing: 12) {
-                        TemperaturesView(viewModel: viewModel)
-                        TyresView(viewModel: viewModel)
-                        LapInfoView(viewModel: viewModel)
-                        DamageView(viewModel: viewModel)
-                    }
-
-                }
-                .padding(.horizontal, 50)
             }
             Tab("Sessions", systemImage: "clock") {
                 SessionsView()
@@ -40,6 +23,7 @@ struct ContentView: View {
                 SettingsView(viewModel: viewModel)
             }
         }
+        .environmentObject(themeManager)
         .onAppear {
             viewModel.startListening()
         }
