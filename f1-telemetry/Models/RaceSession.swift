@@ -12,6 +12,8 @@ final class RaceSession {
     var totalLapsPlanned: Int16 = 0
     var createdAt: Date = Date()
     @Relationship(inverse: \LapSummary.session) var lapSummaries: [LapSummary]? = []
+    @Relationship(inverse: \SessionWeatherSample.session) var weatherSamples: [SessionWeatherSample]? = []
+    @Relationship(inverse: \SessionClassification.session) var classifications: [SessionClassification]? = []
 
     init(
         sessionUID: UInt64 = 0,

@@ -43,7 +43,6 @@ struct SessionView: View {
             }
         }
         .navigationTitle(trackName(for: session.trackId))
-        .navigationBarTitleDisplayMode(.inline)
     }
     
     @ViewBuilder

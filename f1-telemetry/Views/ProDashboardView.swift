@@ -20,14 +20,12 @@ struct ProDashboardView: View {
             let layout = DashboardLayoutMetrics(size: proxy.size)
             
             ZStack {
-                LinearGradient(
-                    colors: selectedTeam.backgroundGradient,
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+                backgroundLayer
                 
                 VStack(alignment: .leading, spacing: layout.cardSpacing) {
+                    if isSafetyCarActive {
+                        safetyCarBanner
+                    }
                     if layout.usesWideLayout {
                         HStack(alignment: .top, spacing: layout.cardSpacing) {
                             performanceSection(layout: layout)
@@ -63,41 +61,45 @@ struct ProDashboardView: View {
     private var selectedTeam: TeamTheme {
         themeManager.selectedTeam
     }
-    
-    private var metricsRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                MetricPill(
-                    title: "Speed",
-                    value: "\(Int(viewModel.speed.safeInt())) km/h",
-                    accent: selectedTeam.speedColor
-                )
-                MetricPill(
-                    title: "Gear",
-                    value: gearDisplay,
-                    accent: selectedTeam.accent
-                )
-                MetricPill(
-                    title: "G-Force",
-                    value: gForceMagnitude,
-                    accent: selectedTeam.gLatColor
-                )
-                MetricPill(
-                    title: "Throttle",
-                    value: "\(Int(viewModel.throttle))%",
-                    accent: selectedTeam.throttleColor
-                )
-                MetricPill(
-                    title: "Brake",
-                    value: "\(Int(viewModel.brake))%",
-                    accent: selectedTeam.brakeColor
-                )
-            }
+
+    private var isSafetyCarActive: Bool {
+        viewModel.safetyCarStatus != 0
+    }
+
+    @ViewBuilder
+    private var backgroundLayer: some View {
+        if isSafetyCarActive {
+            Color.yellow.opacity(0.9)
+                .ignoresSafeArea()
+        } else {
+            LinearGradient(
+                colors: selectedTeam.backgroundGradient,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
         }
     }
     
-    private var teamSelector: some View {
-        TeamThemeMenu()
+    private var safetyCarBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "car.fill")
+                .font(.title2.bold())
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Safety Car Deployed")
+                    .font(.headline)
+                Text(safetyCarLabel(for: viewModel.safetyCarStatus))
+                    .font(.subheadline)
+                    .opacity(0.8)
+            }
+            Spacer()
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.85))
+        )
+        .foregroundStyle(Color.black)
     }
     
     private func performanceSection(layout: DashboardLayoutMetrics) -> some View {
@@ -130,66 +132,188 @@ struct ProDashboardView: View {
     }
     
     private var statsSection: some View {
-        VStack(spacing: 18) {
-
+        VStack(spacing: 10) {
             TelemetryCard {
-                VStack(spacing: 18) {
-                    HStack(spacing: 18) {
-                        FillBarMetricCard(
-                            title: "Speed",
-                            icon: "speedometer",
-                            value: currentSpeedValue,
-                            color: selectedTeam.speedColor, maxValue: speedGaugeMax,
-                            valueLabel: "\(Int(viewModel.speed.safeInt())) km/h"
-                        )
+                VStack(spacing: 10) {
+                    HStack(spacing: 5) {
                         
-                        FillBarMetricCard(
-                            title: "Revs",
-                            icon: "dial.medium",
-                            value: currentRPMValue,
-                            color: selectedTeam.accent, maxValue: rpmGaugeMax,
-                            valueLabel: "\(Int(viewModel.rpm)) rpm",
-                            highlightFractionRange: 0.9...1.0,
-                            highlightColor: .red
-                        )
-                    }
-                    
-                    Divider().background(Color.white.opacity(0.08))
-                    
-                    HStack(spacing: 18) {
-                        FillBarMetricCard(
-                            title: "Throttle",
-                            icon: "bolt.fill",
-                            value: viewModel.throttle,
-                            color: selectedTeam.throttleColor
-                        )
+                        handlingBalanceCard
                         
-                        FillBarMetricCard(
-                            title: "Brake",
-                            icon: "hand.raised.fill",
-                            value: viewModel.brake,
-                            color: selectedTeam.brakeColor
-                        )
+                        Divider().background(Color.white.opacity(0.08))
+                        
+                        tractionCircleSection
+                        
                     }
-
                     Divider().background(Color.white.opacity(0.08))
-
-                    HStack(spacing: 12) {
-                        StatChip(
-                            label: "Gap Ahead",
-                            value: gapToFrontDisplay,
-                            color: selectedTeam.speedColor
-                        )
-                        StatChip(
-                            label: "Gap Behind",
-                            value: gapToBehindDisplay,
-                            color: selectedTeam.secondaryAccent
-                        )
-                    }
+                    statChipRow
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
+    private var handlingBalanceCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(viewModel.handlingBalance.displayName)
+                .font(.headline)
+                .foregroundStyle(handlingColor(for: viewModel.handlingBalance))
+
+            handlingBalanceGraph
+                .frame(height: 150)
+        }
+    }
+    
+    @ViewBuilder
+    private var rpmGaugeView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Gauge(value: currentRPMValue, in: 0...max(rpmGaugeMax, 1)) {
+                EmptyView()
+            } currentValueLabel: {
+                Text("\(Int(viewModel.rpm))")
+                    .font(.title3.bold().monospacedDigit())
+                    .foregroundStyle(selectedTeam.accent)
+            }
+            .gaugeStyle(.accessoryCircular)
+            .tint(
+                Gradient(colors: [
+                    selectedTeam.accent,
+                    .orange,
+                    .red
+                ])
+            )
+            .frame(width: 110, height: 110)
+        }
+    }
+    
+    @ViewBuilder
+    private var tractionCircleSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+
+            HStack {
+                Spacer()
+                Text(tractionUtilizationDisplay)
+                    .font(.headline.monospacedDigit())
+                    .foregroundStyle(selectedTeam.throttleColor)
+            }
+            
+            if gForceSamples.isEmpty {
+                ChartPlaceholder(
+                    message: "Waiting for G Force data",
+                    minHeight: 140
+                )
+                .frame(height: 150)
+            } else {
+                let samples = gForceSamples
+                let latestId = samples.last?.id
+                Chart {
+                    ForEach(tractionCircleBoundaryPoints) { point in
+                        LineMark(
+                            x: .value("Longitudinal", point.longitudinal),
+                            y: .value("Lateral", point.lateral)
+                        )
+                        .foregroundStyle(.white.opacity(0.18))
+                    }
+                    
+                    RuleMark(x: .value("Zero Longitudinal", 0))
+                        .lineStyle(.init(lineWidth: 1, dash: [4]))
+                        .foregroundStyle(.white.opacity(0.3))
+                    
+                    RuleMark(y: .value("Zero Lateral", 0))
+                        .lineStyle(.init(lineWidth: 1, dash: [4]))
+                        .foregroundStyle(.white.opacity(0.3))
+                    
+                    ForEach(samples) { sample in
+                        PointMark(
+                            x: .value("Longitudinal", clampedGForce(sample.longitudinal)),
+                            y: .value("Lateral", clampedGForce(sample.lateral))
+                        )
+                        .symbolSize(sample.id == latestId ? 80 : 28)
+                        .foregroundStyle(sample.id == latestId ? selectedTeam.accent : selectedTeam.accent.opacity(0.35))
+                    }
+                }
+                .chartXScale(domain: gForceDomain)
+                .chartYScale(domain: gForceDomain)
+                .chartXAxis {
+                    AxisMarks(position: .bottom)
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .frame(width: 200, height: 150)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var statChipRow: some View {
+        HStack(spacing: 18) {
+            rpmGaugeView
+            StatChip(
+                label: "Gap Ahead",
+                value: gapToFrontDisplay,
+                color: selectedTeam.speedColor
+            )
+            StatChip(
+                label: "Gap Behind",
+                value: gapToBehindDisplay,
+                color: selectedTeam.secondaryAccent
+            )
+            StatChip(
+                label: "Penalties",
+                value: "+\(viewModel.penaltiesSeconds)s",
+                color: viewModel.penaltiesSeconds > 0 ? selectedTeam.brakeColor : .green
+            )
+        }
+    }
+    
+    @ViewBuilder
+    private var handlingBalanceGraph: some View {
+        let frontData = trimmedHistory(viewModel.frontSlipHistory)
+        let rearData = trimmedHistory(viewModel.rearSlipHistory)
+        let combined = (frontData + rearData).sorted { $0.timestamp < $1.timestamp }
+        let fallbackDomain = Date().addingTimeInterval(-chartTimeWindow)...Date()
+        
+        if combined.isEmpty {
+            ChartPlaceholder(
+                message: "Waiting for wheel slip data",
+                minHeight: 140
+            )
+        } else {
+            Chart {
+                ForEach(frontData) { point in
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Slip", clampedSlip(point.value))
+                    )
+                    .foregroundStyle(by: .value("Axle", "Front"))
+                    .interpolationMethod(.catmullRom)
+                }
+                
+                ForEach(rearData) { point in
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Slip", clampedSlip(point.value))
+                    )
+                    .foregroundStyle(by: .value("Axle", "Rear"))
+                    .interpolationMethod(.catmullRom)
+                }
+                
+                RuleMark(y: .value("Neutral", 0))
+                    .lineStyle(.init(lineWidth: 1, dash: [5]))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .chartForegroundStyleScale([
+                "Front": selectedTeam.throttleColor,
+                "Rear": selectedTeam.brakeColor
+            ])
+            .chartXScale(domain: chartDomain(for: combined) ?? fallbackDomain)
+            .chartYScale(domain: -1.0...1.0)
+            .chartYAxis {
+                AxisMarks(values: [-1, -0.5, 0, 0.5, 1])
+            }
+            .chartLegend(position: .bottom)
+        }
     }
     
     private var damageSection: some View {
@@ -349,9 +473,9 @@ struct ProDashboardView: View {
             self.horizontalPadding = max(20, size.width * 0.04)
             self.verticalPadding = max(16, safeHeight * 0.04)
             let basePrimary = safeHeight * (usesWideLayout ? 0.26 : 0.22)
-            self.primaryChartHeight = min(max(basePrimary, 140), 260)
-            let baseInput = safeHeight * (usesWideLayout ? 0.18 : 0.16)
-            self.inputChartHeight = min(max(baseInput, 110), 180)
+            let uniformHeight = min(max(basePrimary, 140), 260) * 0.75
+            self.primaryChartHeight = uniformHeight
+            self.inputChartHeight = uniformHeight
         }
     }
     
@@ -365,21 +489,53 @@ struct ProDashboardView: View {
         }
     }
     
-    private var currentSpeedValue: Double {
-        sanitizedGaugeValue(viewModel.speed)
-    }
-    
-    private var speedGaugeMax: Double {
-        let historyPeak = viewModel.speedHistory.map(\.value).max() ?? 0
-        return max(320, historyPeak + 20)
-    }
-    
     private var currentRPMValue: Double {
         sanitizedGaugeValue(viewModel.rpm)
     }
     
     private var rpmGaugeMax: Double {
         max(10000, viewModel.maxRPM)
+    }
+    
+    private let gForceLimit: Double = 4.5
+    
+    private var gForceDomain: ClosedRange<Double> {
+        -gForceLimit...gForceLimit
+    }
+    
+    private var tractionUtilization: Double {
+        let magnitude = hypot(viewModel.gLat, viewModel.gLong)
+        return min(1.0, max(0, magnitude / gForceLimit))
+    }
+    
+    private var tractionUtilizationDisplay: String {
+        String(format: "%.0f%%", tractionUtilization * 100)
+    }
+    
+    private var gForceSamples: [GForceSample] {
+        let latHistory = trimmedHistory(viewModel.lateralGHistory)
+        let longHistory = trimmedHistory(viewModel.longitudinalGHistory)
+        let count = min(latHistory.count, longHistory.count)
+        guard count > 0 else { return [] }
+        return (0..<count).map { index in
+            GForceSample(
+                id: latHistory[index].id,
+                timestamp: latHistory[index].timestamp,
+                lateral: latHistory[index].value,
+                longitudinal: longHistory[index].value
+            )
+        }
+    }
+    
+    private var tractionCircleBoundaryPoints: [TractionBoundaryPoint] {
+        stride(from: 0.0, through: 360.0, by: 12.0).map { angle in
+            let radians = angle * .pi / 180
+            return TractionBoundaryPoint(
+                angle: angle,
+                lateral: sin(radians) * gForceLimit,
+                longitudinal: cos(radians) * gForceLimit
+            )
+        }
     }
     
     private var damageMetrics: [DamageMetric] {
@@ -394,23 +550,10 @@ struct ProDashboardView: View {
         ]
     }
     
-    private var tyreDamageMetrics: [DamageMetric] {
-        [
-            DamageMetric(label: "Front Left", value: tyreDamageValue(at: 2)),
-            DamageMetric(label: "Front Right", value: tyreDamageValue(at: 3)),
-            DamageMetric(label: "Rear Left", value: tyreDamageValue(at: 0)),
-            DamageMetric(label: "Rear Right", value: tyreDamageValue(at: 1))
-        ]
-    }
-    
     private var structuralDamageMetrics: [DamageMetric] {
         damageMetrics.filter { metric in
             ["Floor", "Sidepods", "Gearbox", "Diffuser"].contains(metric.label)
         }
-    }
-    
-    private var mostCriticalDamage: DamageMetric? {
-        damageMetrics.max(by: { $0.value < $1.value })
     }
     
     private func tyreDamageValue(at index: Int) -> Double {
@@ -448,25 +591,18 @@ struct ProDashboardView: View {
         return max(value, 0)
     }
     
-    private var avgSpeed: String {
-        guard viewModel.speedHistory.count > 4 else { return "-- km/h" }
-        let subset = viewModel.speedHistory.suffix(60)
-        let avg = subset.map(\.value).reduce(0, +) / Double(subset.count)
-        return "\(Int(avg)) km/h"
+    private func clampedSlip(_ value: Double) -> Double {
+        if value.isNaN || value.isInfinite {
+            return 0
+        }
+        return min(1, max(-1, value))
     }
     
-    private var avgThrottle: String {
-        guard viewModel.throttleHistory.count > 4 else { return "-- %" }
-        let subset = viewModel.throttleHistory.suffix(60)
-        let avg = subset.map(\.value).reduce(0, +) / Double(subset.count)
-        return "\(Int(avg))%"
-    }
-    
-    private var avgBrake: String {
-        guard viewModel.brakeHistory.count > 4 else { return "-- %" }
-        let subset = viewModel.brakeHistory.suffix(60)
-        let avg = subset.map(\.value).reduce(0, +) / Double(subset.count)
-        return "\(Int(avg))%"
+    private func clampedGForce(_ value: Double) -> Double {
+        if value.isNaN || value.isInfinite {
+            return 0
+        }
+        return min(gForceLimit, max(-gForceLimit, value))
     }
     
     private var gapToFrontDisplay: String {
@@ -477,11 +613,6 @@ struct ProDashboardView: View {
     private var gapToBehindDisplay: String {
         let trimmed = viewModel.deltaToBehind.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "+0.000" : trimmed
-    }
-    
-    private var nextStrategyTyreDisplay: String {
-        let trimmed = viewModel.nextStrategyTyre.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "TBD" : trimmed
     }
     
     private var gForceMagnitude: String {
@@ -514,7 +645,27 @@ struct ProDashboardView: View {
         
         return Array(history[startIndex...])
     }
-    
+
+    private func safetyCarLabel(for status: UInt8) -> String {
+        switch status {
+        case 1: return "Full Safety Car"
+        case 2: return "Virtual Safety Car"
+        case 3: return "Formation Lap"
+        default: return "Neutralized track"
+        }
+    }
+
+    private func handlingColor(for state: HandlingBalanceState) -> Color {
+        switch state {
+        case .neutral:
+            return .green
+        case .understeer:
+            return selectedTeam.brakeColor
+        case .oversteer:
+            return selectedTeam.throttleColor
+        }
+    }
+
     private func chartDomain(for history: [TelemetryPoint]) -> ClosedRange<Date>? {
         guard
             let firstTimestamp = history.first?.timestamp,
@@ -526,140 +677,6 @@ struct ProDashboardView: View {
         let windowStart = latestTimestamp.addingTimeInterval(-chartTimeWindow)
         let start = max(firstTimestamp, windowStart)
         return start...latestTimestamp
-    }
-}
-
-// MARK: - Building Blocks
-
-private struct FillBarMetricCard: View {
-    let title: String
-    let icon: String
-    let value: Double
-    let maxValue: Double
-    let color: Color
-    let valueLabel: String?
-    let highlightFractionRange: ClosedRange<Double>?
-    let highlightColor: Color?
-    
-    init(
-        title: String,
-        icon: String,
-        value: Double,
-        color: Color,
-        maxValue: Double = 100,
-        valueLabel: String? = nil,
-        highlightFractionRange: ClosedRange<Double>? = nil,
-        highlightColor: Color? = nil
-    ) {
-        self.title = title
-        self.icon = icon
-        self.value = value
-        self.color = color
-        self.maxValue = maxValue
-        self.valueLabel = valueLabel
-        self.highlightFractionRange = highlightFractionRange
-        self.highlightColor = highlightColor
-    }
-    
-    private var normalizedValue: Double {
-        guard maxValue > 0 else { return 0 }
-        return min(max(value / maxValue, 0), 1)
-    }
-    
-    private var formattedValue: String {
-        valueLabel ?? "\(Int(value))%"
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title.uppercased())
-                        .font(.caption2.weight(.semibold))
-                }
-            } icon: {
-                Image(systemName: icon)
-            }
-            .foregroundStyle(.white.opacity(0.85))
-            
-            GeometryReader { proxy in
-                let clamped = normalizedValue
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                    
-                    if let range = highlightFractionRange, let highlightColor {
-                        let start = max(0, min(1, range.lowerBound))
-                        let end = max(start, min(1, range.upperBound))
-                        let width = proxy.size.width * (end - start)
-                        
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(highlightColor.opacity(0.4))
-                            .frame(width: width)
-                            .offset(x: proxy.size.width * start)
-                    }
-                    
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    color,
-                                    color.opacity(0.4)
-                                ],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: proxy.size.width * clamped)
-                }
-            }
-            .frame(height: 34)
-            
-            Text(formattedValue)
-                .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(color)
-        }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(color.opacity(0.35), lineWidth: 1)
-        )
-    }
-}
-
-private struct DamageProgressRow: View {
-    let label: String
-    let value: Double
-    let color: Color
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(label.uppercased())
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.6))
-                Spacer()
-                Text("\(Int(value))%")
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(color)
-            }
-            
-            GeometryReader { proxy in
-                let clamped = min(max(value / 100, 0), 1)
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(color.opacity(0.8))
-                        .frame(width: proxy.size.width * clamped)
-                }
-            }
-            .frame(height: 10)
-        }
-        .padding(.vertical, 4)
     }
 }
 
@@ -703,3 +720,33 @@ private struct DamageMetric: Identifiable {
     let value: Double
 }
 
+private struct GForceSample: Identifiable {
+    let id: UUID
+    let timestamp: Date
+    let lateral: Double
+    let longitudinal: Double
+}
+
+private struct TractionBoundaryPoint: Identifiable {
+    let id = UUID()
+    let angle: Double
+    let lateral: Double
+    let longitudinal: Double
+}
+
+extension Int {
+    var roundedWithAbbreviations: String {
+        let number = Double(self)
+        let thousand = number / 1000
+        let million = number / 1000000
+        if million >= 1.0 {
+            return "\(round(million*10)/10)M"
+        }
+        else if thousand >= 1.0 {
+            return "\(round(thousand*10)/10)k"
+        }
+        else {
+            return "\(self)"
+        }
+    }
+}

@@ -35,6 +35,9 @@ extension Double {
 @MainActor
 class TelemetryViewModel: ObservableObject {
     private let historyLimit = 160
+    private let weatherPersistInterval: TimeInterval = 20
+    private let baseChassisMassKg: Double = 798
+    private let driverMassKg: Double = 80
     // MARK: - Persistence Toggle
     private let persistenceEnabled = true // Persist sessions, laps, and telemetry traces
     
@@ -108,7 +111,17 @@ class TelemetryViewModel: ObservableObject {
     @Published var sidepodDamage: Int = 0
     @Published var gearBoxDamage: Int = 0
     @Published var engineDamagePercent: Int = 0
+    @Published var wheelSlipFront: Double = 0
+    @Published var wheelSlipRear: Double = 0
+    @Published var handlingBalance: HandlingBalanceState = .neutral
+    @Published var handlingConfidence: Double = 0
     @Published var lastPacketTimestamp: String = "00:00:00.000"
+    
+    var vehicleMassEstimateKg: Double {
+        let minimumMass = baseChassisMassKg + driverMassKg
+        let total = minimumMass + max(0, fuelInTank)
+        return max(total, minimumMass)
+    }
     
     // Lap Data
     @Published var currentLap: Int = 0
@@ -121,6 +134,10 @@ class TelemetryViewModel: ObservableObject {
     @Published var deltaToFront: String = "+0.000"
     @Published var deltaToBehind: String = "+0.000"
     @Published var lapDistance: Double = 0
+    @Published var penaltiesSeconds: Int = 0
+    @Published var warningsCount: Int = 0
+    @Published var unservedDriveThrough: Int = 0
+    @Published var unservedStopGo: Int = 0
     
     // Connection Status
     @Published var isConnected: Bool = false
@@ -142,9 +159,12 @@ class TelemetryViewModel: ObservableObject {
     @Published private(set) var brakeHistory: [TelemetryPoint] = []
     @Published private(set) var lateralGHistory: [TelemetryPoint] = []
     @Published private(set) var longitudinalGHistory: [TelemetryPoint] = []
+    @Published private(set) var frontSlipHistory: [TelemetryPoint] = []
+    @Published private(set) var rearSlipHistory: [TelemetryPoint] = []
     private var lapTelemetrySamples: [LapTelemetrySample] = []
     private var lapSectorTimes: [Int: SectorTimes] = [:]
     private var lapValidity: [Int: Bool] = [:]
+    private var lastWeatherPersistDate: Date?
 
     // Session Info
     @Published var weather: UInt8 = 0 // 0 = clear
@@ -158,6 +178,8 @@ class TelemetryViewModel: ObservableObject {
 
     // Weather forecast (next 5 samples)
     @Published var weatherForecastNext: [UInt8] = []
+    @Published var weatherForecastDetailed: [WeatherForecastRecord] = []
+    @Published var safetyCarStatus: UInt8 = 0
     
     // Participants
     @Published var participants: [ParticipantData] = []
@@ -249,7 +271,13 @@ class TelemetryViewModel: ObservableObject {
                     speed: Double(telemetry.speed),
                     throttle: Double(telemetry.throttle) * 100,
                     brake: Double(telemetry.brake) * 100,
-                    gear: Int(telemetry.gear)
+                    gear: Int(telemetry.gear),
+                    steer: Double(telemetry.steer),
+                    rpm: Double(telemetry.engineRPM),
+                    lateralG: self.gLat,
+                    longitudinalG: self.gLong,
+                    frontSlip: self.wheelSlipFront,
+                    rearSlip: self.wheelSlipRear
                 )
                 
                 // Log first packet received
@@ -286,6 +314,10 @@ class TelemetryViewModel: ObservableObject {
                 self.currentLap = latestLapNumber
                 self.position = Int(lapData.carPosition)
                 self.lapDistance = Double(lapData.lapDistance)
+                self.penaltiesSeconds = Int(lapData.penalties)
+                self.warningsCount = Int(lapData.totalWarnings)
+                self.unservedDriveThrough = Int(lapData.numUnservedDriveThroughPens)
+                self.unservedStopGo = Int(lapData.numUnservedStopGoPens)
                 
                 self.recordSectorTimes(from: lapData)
                 
@@ -389,11 +421,16 @@ class TelemetryViewModel: ObservableObject {
                 self.trackId = packet.trackId
                 self.trackLength = Int(packet.trackLength)
                 self.sessionType = packet.sessionType
+                self.safetyCarStatus = packet.safetyCarStatus
 
                 // Update weather forecast samples
                 if !packet.weatherForecastSamples.isEmpty {
                     // Take first 5 samples
                     self.weatherForecastNext = packet.weatherForecastSamples.prefix(5).map { $0.weather }
+                    self.weatherForecastDetailed = self.forecastRecords(from: packet)
+                } else {
+                    self.weatherForecastNext = []
+                    self.weatherForecastDetailed = []
                 }
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
@@ -405,6 +442,7 @@ class TelemetryViewModel: ObservableObject {
                     airTemp: packet.airTemperature,
                     totalLaps: packet.totalLaps
                 )
+                self.persistWeatherSample(packet: packet)
             }
         }
 
@@ -424,6 +462,13 @@ class TelemetryViewModel: ObservableObject {
                 // Update world position
                 self.worldX = Double(m.worldPositionX)
                 self.worldZ = Double(m.worldPositionZ)
+                if packet.wheelSlip.count == 4 {
+                    let rear = (Double(packet.wheelSlip[0]) + Double(packet.wheelSlip[1])) / 2.0
+                    let front = (Double(packet.wheelSlip[2]) + Double(packet.wheelSlip[3])) / 2.0
+                    self.updateHandlingBalance(frontSlip: front, rearSlip: rear)
+                } else {
+                    self.updateHandlingBalance(frontSlip: 0, rearSlip: 0)
+                }
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
                 self.recordGForceSnapshot()
@@ -461,6 +506,12 @@ class TelemetryViewModel: ObservableObject {
                 self.engineDamagePercent = Int(dmg.engineDamage)
             }
         }
+
+        telemetryListener.onFinalClassificationReceived = { [weak self] packet in
+            DispatchQueue.main.async {
+                self?.persistFinalClassification(packet)
+            }
+        }
     }
     
     // MARK: - Public Methods
@@ -482,6 +533,8 @@ class TelemetryViewModel: ObservableObject {
         brakeHistory.removeAll()
         lateralGHistory.removeAll()
         longitudinalGHistory.removeAll()
+        frontSlipHistory.removeAll()
+        rearSlipHistory.removeAll()
     }
     
     // MARK: - Private Helpers
@@ -592,7 +645,18 @@ class TelemetryViewModel: ObservableObject {
         lastPacketTimestamp = String(format: "%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds)
     }
     
-    private func captureLapTelemetrySample(speed: Double, throttle: Double, brake: Double, gear: Int) {
+    private func captureLapTelemetrySample(
+        speed: Double,
+        throttle: Double,
+        brake: Double,
+        gear: Int,
+        steer: Double,
+        rpm: Double,
+        lateralG: Double,
+        longitudinalG: Double,
+        frontSlip: Double,
+        rearSlip: Double
+    ) {
         guard persistenceEnabled else { return }
         guard trackLength > 0 else { return }
         let lapProgress = max(0, min(1, lapDistance / Double(trackLength)))
@@ -601,7 +665,13 @@ class TelemetryViewModel: ObservableObject {
             speed: speed,
             throttle: throttle,
             brake: brake,
-            gear: Double(gear)
+            gear: Double(gear),
+            rpm: rpm,
+            steer: steer,
+            lateralG: lateralG,
+            longitudinalG: longitudinalG,
+            frontSlip: frontSlip,
+            rearSlip: rearSlip
         )
         lapTelemetrySamples.append(sample)
     }
@@ -647,6 +717,42 @@ class TelemetryViewModel: ObservableObject {
         guard gapMs > 0 else { return "+0.000" }
         return formattedGap(fromMilliseconds: gapMs)
     }
+
+    private func forecastRecords(from packet: PacketSessionData) -> [WeatherForecastRecord] {
+        packet.weatherForecastSamples.prefix(8).map {
+            WeatherForecastRecord(
+                timeOffsetMinutes: Int($0.timeOffset),
+                weatherCode: $0.weather,
+                trackTemp: $0.trackTemperature,
+                airTemp: $0.airTemperature
+            )
+        }
+    }
+
+    private func updateHandlingBalance(frontSlip: Double, rearSlip: Double) {
+        wheelSlipFront = frontSlip
+        wheelSlipRear = rearSlip
+        let slipDelta = frontSlip - rearSlip
+        let steerMagnitude = abs(steer)
+        let gMagnitude = abs(gLat)
+        let threshold = 0.05
+
+        var state: HandlingBalanceState = .neutral
+        if steerMagnitude > 0.08 {
+            if slipDelta > threshold {
+                state = .understeer
+            } else if slipDelta < -threshold {
+                state = .oversteer
+            }
+        }
+        handlingBalance = state
+
+        let normalizedSlip = min(1.0, max(0, abs(slipDelta) / 0.7))
+        let steeringFactor = min(1.0, steerMagnitude / 0.9)
+        let gripFactor = min(1.0, max(0.2, gMagnitude / 2.8))
+        handlingConfidence = normalizedSlip * steeringFactor * gripFactor
+        recordHandlingSnapshot(frontSlip: frontSlip, rearSlip: rearSlip)
+    }
     
     private func persistSessionIfNeeded(header: PacketHeader) {
         guard persistenceEnabled else { return }
@@ -674,6 +780,34 @@ class TelemetryViewModel: ObservableObject {
             }
         } catch {
             print("❌ Failed to persist session: \(error)")
+        }
+    }
+
+    private func persistWeatherSample(packet: PacketSessionData) {
+        guard persistenceEnabled else { return }
+        guard packet.header.sessionUID != 0 else { return }
+        let now = Date()
+        if let last = lastWeatherPersistDate, now.timeIntervalSince(last) < weatherPersistInterval {
+            return
+        }
+        guard let session = ensureSession(for: packet.header.sessionUID) else { return }
+        let records = forecastRecords(from: packet)
+        let sample = SessionWeatherSample(
+            session: session,
+            sessionTime: Double(packet.header.sessionTime),
+            timeLeft: Int32(packet.timeLeft),
+            weatherCode: packet.weather,
+            trackTemperature: Int16(packet.trackTemperature),
+            airTemperature: Int16(packet.airTemperature),
+            safetyCarStatus: packet.safetyCarStatus,
+            forecast: records
+        )
+        context.insert(sample)
+        do {
+            try context.save()
+            lastWeatherPersistDate = now
+        } catch {
+            print("⚠️ Failed to persist weather sample: \(error)")
         }
     }
     
@@ -789,25 +923,7 @@ class TelemetryViewModel: ObservableObject {
         guard persistenceEnabled else { return }
         // Ensure we have a valid session UID
         guard header.sessionUID != 0 else { return }
-        let uid = header.sessionUID
-        
-        // 1. Fetch (or create) the RaceSession for this session UID so we can relate the lap summary.
-        var session: RaceSession?
-        do {
-            let fetch = FetchDescriptor<RaceSession>(predicate: #Predicate { $0.sessionUID == uid })
-            session = try context.fetch(fetch).first
-        } catch {
-            print("⚠️ Failed to fetch RaceSession for UID \(uid): \(error)")
-        }
-        
-        // If the session does not yet exist, create and insert it so we always have a parent object.
-        if session == nil {
-            session = RaceSession(sessionUID: uid,
-                                  sessionType: Int16(self.sessionType),
-                                  trackId: Int16(self.trackId))
-            context.insert(session!)
-        }
-        guard let session = session else { return }
+        guard let session = ensureSession(for: header.sessionUID) else { return }
         
         // 2. Build LapSummary from the supplied LapData
         let lapTime = Int32(lapData.lastLapTimeInMS)
@@ -849,9 +965,107 @@ class TelemetryViewModel: ObservableObject {
         context.insert(summary)
         do {
             try context.save()
-            print("💾 Saved LapSummary for lap #\(completedLapNumber) (UID: \(uid))")
+            print("💾 Saved LapSummary for lap #\(completedLapNumber) (UID: \(header.sessionUID))")
         } catch {
             print("❌ Failed saving LapSummary: \(error)")
+        }
+    }
+
+    private func ensureSession(for uid: UInt64) -> RaceSession? {
+        do {
+            let fetch = FetchDescriptor<RaceSession>(predicate: #Predicate { $0.sessionUID == uid })
+            if let session = try context.fetch(fetch).first {
+                persistedSessions.insert(uid)
+                return session
+            }
+            let session = RaceSession(
+                sessionUID: uid,
+                sessionType: Int16(self.sessionType),
+                trackId: Int16(self.trackId),
+                weatherCode: Int16(self.weather),
+                trackTemperature: Int16(self.trackTemp),
+                airTemperature: Int16(self.airTemp),
+                totalLapsPlanned: Int16(self.totalLapsSession)
+            )
+            context.insert(session)
+            try context.save()
+            persistedSessions.insert(uid)
+            return session
+        } catch {
+            print("⚠️ Failed to ensure session exists: \(error)")
+            return nil
+        }
+    }
+
+    private func persistFinalClassification(_ packet: PacketFinalClassificationData) {
+        guard persistenceEnabled else { return }
+        guard let session = ensureSession(for: packet.header.sessionUID) else { return }
+
+        do {
+            let existingDescriptor = FetchDescriptor<SessionClassification>()
+            let existingEntries = try context.fetch(existingDescriptor).filter {
+                $0.session?.sessionUID == session.sessionUID
+            }
+            for entry in existingEntries {
+                if let stints = entry.stints {
+                    stints.forEach { context.delete($0) }
+                }
+                context.delete(entry)
+            }
+
+            var newEntries: [SessionClassification] = []
+            for (vehicleIndex, classification) in packet.classificationData.enumerated() {
+                guard classification.numLaps > 0 || classification.resultStatus > 0 else { continue }
+                let participant = participants.indices.contains(vehicleIndex) ? participants[vehicleIndex] : nil
+                let driverName = participant?.name ?? "Car #\(vehicleIndex + 1)"
+                let teamId = participant?.teamId ?? 255
+                let entry = SessionClassification(
+                    session: session,
+                    vehicleIndex: Int16(vehicleIndex),
+                    driverName: driverName,
+                    teamId: teamId,
+                    position: classification.position,
+                    numLaps: classification.numLaps,
+                    gridPosition: classification.gridPosition,
+                    points: classification.points,
+                    numPitStops: classification.numPitStops,
+                    resultStatus: classification.resultStatus,
+                    bestLapTimeMS: classification.bestLapTimeInMS,
+                    totalRaceTimeSeconds: classification.totalRaceTime,
+                    penaltiesTime: classification.penaltiesTime,
+                    numPenalties: classification.numPenalties
+                )
+
+                let arraysCount = min(classification.tyreStintsActual.count,
+                                      min(classification.tyreStintsVisual.count, classification.tyreStintsEndLaps.count))
+                let stintCount = min(Int(classification.numTyreStints), arraysCount)
+                if stintCount > 0 {
+                    var stintEntries: [SessionStint] = []
+                    for stintIndex in 0..<stintCount {
+                        guard stintIndex < classification.tyreStintsActual.count,
+                              stintIndex < classification.tyreStintsVisual.count,
+                              stintIndex < classification.tyreStintsEndLaps.count else { break }
+                        let stint = SessionStint(
+                            classification: entry,
+                            stintIndex: UInt8(stintIndex),
+                            actualCompound: classification.tyreStintsActual[stintIndex],
+                            visualCompound: classification.tyreStintsVisual[stintIndex],
+                            endLap: classification.tyreStintsEndLaps[stintIndex]
+                        )
+                        stintEntries.append(stint)
+                        context.insert(stint)
+                    }
+                    entry.stints = stintEntries
+                }
+
+                context.insert(entry)
+                newEntries.append(entry)
+            }
+            session.classifications = newEntries
+            try context.save()
+            print("💾 Final classification stored for session \(session.sessionUID)")
+        } catch {
+            print("⚠️ Failed to persist final classification: \(error)")
         }
     }
     
@@ -879,6 +1093,12 @@ extension TelemetryViewModel {
         appendHistory(&longitudinalGHistory, value: gLong, timestamp: timestamp)
     }
     
+    private func recordHandlingSnapshot(frontSlip: Double, rearSlip: Double) {
+        let timestamp = Date()
+        appendHistory(&frontSlipHistory, value: frontSlip, timestamp: timestamp)
+        appendHistory(&rearSlipHistory, value: rearSlip, timestamp: timestamp)
+    }
+    
     private func appendHistory(_ history: inout [TelemetryPoint], value: Double, timestamp: Date) {
         guard !value.isNaN, !value.isInfinite else { return }
         history.append(TelemetryPoint(timestamp: timestamp, value: value))
@@ -891,5 +1111,19 @@ extension TelemetryViewModel {
 private struct SectorTimes {
     var sector1: Int32 = 0
     var sector2: Int32 = 0
+}
+
+enum HandlingBalanceState: String {
+    case neutral
+    case understeer
+    case oversteer
+
+    var displayName: String {
+        switch self {
+        case .neutral: return "Neutral"
+        case .understeer: return "Understeer"
+        case .oversteer: return "Oversteer"
+        }
+    }
 }
 

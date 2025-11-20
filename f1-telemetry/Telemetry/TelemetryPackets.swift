@@ -124,6 +124,23 @@ struct CarMotionData {
 struct PacketMotionData {
     var header: PacketHeader // Header
     var carMotionData: [CarMotionData] // Data for all cars on track
+    var suspensionPosition: [Float] = []
+    var suspensionVelocity: [Float] = []
+    var suspensionAcceleration: [Float] = []
+    var wheelSpeed: [Float] = []
+    var wheelSlip: [Float] = []
+    var localVelocityX: Float = 0
+    var localVelocityY: Float = 0
+    var localVelocityZ: Float = 0
+    var angularVelocityX: Float = 0
+    var angularVelocityY: Float = 0
+    var angularVelocityZ: Float = 0
+    var angularAccelerationX: Float = 0
+    var angularAccelerationY: Float = 0
+    var angularAccelerationZ: Float = 0
+    var frontWheelsAngle: Float = 0
+    var frontWheelsAngularVelocity: Float = 0
+    var rearWheelsAngularVelocity: Float = 0
 
     init?(data: Data) {
         guard data.count >= PacketHeader.size + 22 * CarMotionData.size else { return nil }
@@ -136,6 +153,64 @@ struct PacketMotionData {
             carMotionDataArray.append(carMotion)
         }
         carMotionData = carMotionDataArray
+
+        func readFloat() -> Float? {
+            let size = MemoryLayout<Float>.size
+            guard offset + size <= data.count else { return nil }
+            let value = data.subdata(in: offset..<offset+size).withUnsafeBytes { $0.load(as: Float.self) }
+            offset += size
+            return value
+        }
+
+        func readFloatArray(count: Int) -> [Float]? {
+            var values: [Float] = []
+            values.reserveCapacity(count)
+            for _ in 0..<count {
+                guard let value = readFloat() else { return nil }
+                values.append(value)
+            }
+            return values
+        }
+
+        guard
+            let suspensionPos = readFloatArray(count: 4),
+            let suspensionVel = readFloatArray(count: 4),
+            let suspensionAccel = readFloatArray(count: 4),
+            let wheelSpeedArray = readFloatArray(count: 4),
+            let wheelSlipArray = readFloatArray(count: 4),
+            let localVelX = readFloat(),
+            let localVelY = readFloat(),
+            let localVelZ = readFloat(),
+            let angularVelX = readFloat(),
+            let angularVelY = readFloat(),
+            let angularVelZ = readFloat(),
+            let angularAccX = readFloat(),
+            let angularAccY = readFloat(),
+            let angularAccZ = readFloat(),
+            let frontAngle = readFloat(),
+            let frontAngularVelocity = readFloat(),
+            let rearAngularVelocity = readFloat()
+        else {
+            return nil
+        }
+
+        suspensionPosition = suspensionPos
+        suspensionVelocity = suspensionVel
+        suspensionAcceleration = suspensionAccel
+        wheelSpeed = wheelSpeedArray
+        wheelSlip = wheelSlipArray
+        localVelocityX = localVelX
+        localVelocityY = localVelY
+        localVelocityZ = localVelZ
+        angularVelocityX = angularVelX
+        angularVelocityY = angularVelY
+        angularVelocityZ = angularVelZ
+        angularAccelerationX = angularAccX
+        angularAccelerationY = angularAccY
+        angularAccelerationZ = angularAccZ
+        frontWheelsAngle = frontAngle
+        frontWheelsAngularVelocity = frontAngularVelocity
+        rearWheelsAngularVelocity = rearAngularVelocity
     }
 }
 
@@ -673,5 +748,83 @@ struct PacketCarDamageData {
             arr.append(dmg)
         }
         carDamageData = arr
+    }
+}
+
+// MARK: - Final Classification (Packet ID 8)
+
+struct FinalClassificationData {
+    static let maxTyreStints = 8
+    static let expectedSize = 45
+    var position: UInt8
+    var numLaps: UInt8
+    var gridPosition: UInt8
+    var points: UInt8
+    var numPitStops: UInt8
+    var resultStatus: UInt8
+    var bestLapTimeInMS: UInt32
+    var totalRaceTime: Double
+    var penaltiesTime: UInt8
+    var numPenalties: UInt8
+    var numTyreStints: UInt8
+    var tyreStintsActual: [UInt8]
+    var tyreStintsVisual: [UInt8]
+    var tyreStintsEndLaps: [UInt8]
+
+    init(data: Data, offset: inout Int) {
+        func read<T>(_ type: T.Type) -> T {
+            let size = MemoryLayout<T>.size
+            let value = data.subdata(in: offset..<offset+size).withUnsafeBytes { $0.load(as: T.self) }
+            offset += size
+            return value
+        }
+
+        func readArray(count: Int) -> [UInt8] {
+            var array: [UInt8] = []
+            array.reserveCapacity(count)
+            for _ in 0..<count {
+                array.append(read(UInt8.self))
+            }
+            return array
+        }
+
+        position = read(UInt8.self)
+        numLaps = read(UInt8.self)
+        gridPosition = read(UInt8.self)
+        points = read(UInt8.self)
+        numPitStops = read(UInt8.self)
+        resultStatus = read(UInt8.self)
+        bestLapTimeInMS = read(UInt32.self)
+        totalRaceTime = read(Double.self)
+        penaltiesTime = read(UInt8.self)
+        numPenalties = read(UInt8.self)
+        numTyreStints = read(UInt8.self)
+        tyreStintsActual = readArray(count: Self.maxTyreStints)
+        tyreStintsVisual = readArray(count: Self.maxTyreStints)
+        tyreStintsEndLaps = readArray(count: Self.maxTyreStints)
+    }
+}
+
+struct PacketFinalClassificationData {
+    var header: PacketHeader
+    var numCars: UInt8
+    var classificationData: [FinalClassificationData]
+
+    init?(data: Data) {
+        guard data.count >= PacketHeader.size else { return nil }
+        header = PacketHeader(data: data)
+        var offset = PacketHeader.size
+        guard offset + 1 <= data.count else { return nil }
+        numCars = data[offset]
+        offset += 1
+
+        var entries: [FinalClassificationData] = []
+        entries.reserveCapacity(22)
+        for _ in 0..<22 {
+            guard offset + FinalClassificationData.expectedSize <= data.count else { return nil }
+            let entry = FinalClassificationData(data: data, offset: &offset)
+            entries.append(entry)
+        }
+        classificationData = entries
     }
 }

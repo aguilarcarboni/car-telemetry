@@ -56,7 +56,6 @@ struct LapView: View {
             }
         }
         .navigationTitle("Lap \(lap.lapNumber)")
-        .navigationBarTitleDisplayMode(.inline)
     }
     
     // MARK: - Sections
@@ -74,12 +73,8 @@ struct LapView: View {
                         Text("Lap \(lap.lapNumber)")
                             .font(.system(size: 34, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
-                        Text("Vehicle \(vehicleDisplayNumber)")
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.7))
                     }
                     Spacer()
-                    validityBadge(theme: theme)
                 }
                 
                 Divider().background(Color.white.opacity(0.08))
@@ -94,11 +89,6 @@ struct LapView: View {
                         label: "Status",
                         value: lap.isValid ? "Valid" : "Invalid",
                         color: lap.isValid ? theme.throttleColor : theme.brakeColor
-                    )
-                    StatChip(
-                        label: "Vehicle",
-                        value: vehicleLabel,
-                        color: theme.secondaryAccent
                     )
                 }
                 
@@ -199,11 +189,27 @@ struct LapView: View {
                         .font(.footnote)
                         .foregroundStyle(.white.opacity(0.6))
                 } else {
-                    comparisonPicker(
-                        options: comparisonOptions,
-                        selection: comparisonSelection,
-                        activeLap: comparisonLap
-                    )
+                    HStack {
+                        Picker("Compare Against", selection: comparisonSelection) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(comparisonOptions, id: \.id) { option in
+                                Text(lapOptionTitle(for: option))
+                                    .tag(Optional(option.id))
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        Spacer()
+                        if comparisonSelection.wrappedValue != nil {
+                            Button("Clear") {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    comparisonSelection.wrappedValue = nil
+                                }
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
                 
                 if samples.isEmpty {
@@ -240,53 +246,6 @@ struct LapView: View {
                     .foregroundStyle(.white.opacity(0.6))
             }
         }
-    }
-    
-    @ViewBuilder
-    private func comparisonPicker(
-        options: [LapSummary],
-        selection: Binding<UUID?>,
-        activeLap: LapSummary?
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("Compare Against", systemImage: "rectangle.on.rectangle.angled")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.8))
-                Spacer()
-                if selection.wrappedValue != nil {
-                    Button("Clear") {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            selection.wrappedValue = nil
-                        }
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .buttonStyle(.plain)
-                }
-            }
-            
-            Picker("Compare Against", selection: selection) {
-                Text("None").tag(UUID?.none)
-                ForEach(options, id: \.id) { option in
-                    Text(lapOptionTitle(for: option))
-                        .tag(Optional(option.id))
-                }
-            }
-            .pickerStyle(.menu)
-            
-            Text(
-                activeLap.map { "Overlaying \(lapOptionTitle(for: $0))." }
-                ?? "Select another lap to overlay on these telemetry traces."
-            )
-            .font(.caption2)
-            .foregroundStyle(.white.opacity(0.6))
-        }
-        .padding(12)
-        .background(
-            Color.white.opacity(0.04),
-            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-        )
     }
     
     @ViewBuilder
@@ -392,7 +351,7 @@ struct LapView: View {
     }
     
     private func lapOptionTitle(for summary: LapSummary) -> String {
-        "Lap \(summary.lapNumber) • Car #\(Int(summary.vehicleIndex) + 1) • \(summary.isValid ? "Valid" : "Invalid")"
+        "Lap \(summary.lapNumber)"
     }
     
     private func telemetryFooterMessage(
@@ -472,7 +431,7 @@ private struct LapComparisonEntry: Identifiable {
     
     private init(summary: LapSummary, reference: LapSummary, label: String, isCurrent: Bool) {
         self.label = label
-        self.detail = "Lap \(summary.lapNumber) • Car #\(Int(summary.vehicleIndex) + 1) • \(summary.isValid ? "Valid" : "Invalid")"
+        self.detail = "Lap \(summary.lapNumber) • \(summary.isValid ? "Valid" : "Invalid")"
         self.isCurrent = isCurrent
         self.lapTime = summary.lapTimeMS
         self.lapDelta = summary.lapTimeMS - reference.lapTimeMS
@@ -608,6 +567,54 @@ private struct TelemetryMetric: Identifiable {
                 color: theme.secondaryAccent,
                 range: 0...9,
                 valueProvider: { $0.gear }
+            ),
+            TelemetryMetric(
+                id: "rpm",
+                label: "RPM",
+                icon: "gauge.with.dots.needle.33percent",
+                color: theme.accent,
+                range: 0...16000,
+                valueProvider: { $0.rpm }
+            ),
+            TelemetryMetric(
+                id: "steer",
+                label: "Steering Input",
+                icon: "steeringwheel",
+                color: theme.secondaryAccent,
+                range: -1...1,
+                valueProvider: { $0.steer }
+            ),
+            TelemetryMetric(
+                id: "latG",
+                label: "Lateral G",
+                icon: "arrow.triangle.swap",
+                color: theme.gLatColor,
+                range: -5...5,
+                valueProvider: { $0.lateralG }
+            ),
+            TelemetryMetric(
+                id: "longG",
+                label: "Longitudinal G",
+                icon: "arrow.up.arrow.down",
+                color: theme.gLongColor,
+                range: -5...5,
+                valueProvider: { $0.longitudinalG }
+            ),
+            TelemetryMetric(
+                id: "frontSlip",
+                label: "Front Slip",
+                icon: "car.front.waves.up",
+                color: theme.throttleColor,
+                range: 0...1,
+                valueProvider: { $0.frontSlip }
+            ),
+            TelemetryMetric(
+                id: "rearSlip",
+                label: "Rear Slip",
+                icon: "car.rear.and.tire.marks",
+                color: theme.brakeColor,
+                range: 0...1,
+                valueProvider: { $0.rearSlip }
             )
         ]
     }

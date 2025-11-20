@@ -26,6 +26,7 @@ class TelemetryListener: ObservableObject {
     var onMotionReceived: ((PacketMotionData) -> Void)?
     var onParticipantsReceived: ((PacketParticipantsData) -> Void)?
     var onDamageReceived: ((PacketCarDamageData) -> Void)?
+    var onFinalClassificationReceived: ((PacketFinalClassificationData) -> Void)?
     
     init(port: UInt16 = 20777) {
         self.port = port
@@ -232,6 +233,10 @@ class TelemetryListener: ObservableObject {
         case .carDamage:
             if let packet = PacketCarDamageData(data: data) {
                 onDamageReceived?(packet)
+            }
+        case .finalClassification:
+            if let packet = PacketFinalClassificationData(data: data) {
+                onFinalClassificationReceived?(packet)
             }
         default:
             // Log other packet types we're receiving but not processing
