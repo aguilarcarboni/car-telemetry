@@ -4,6 +4,7 @@ import Charts
 struct LapView: View {
     let lap: LapSummary
     @EnvironmentObject private var themeManager: ThemeManager
+    @State private var comparisonLapID: UUID?
     
     var body: some View {
         GeometryReader { proxy in
@@ -19,6 +20,11 @@ struct LapView: View {
                 sessionFastest: sessionFastest
             )
             let telemetryData = telemetrySamples(for: lap)
+            let comparisonOptions = sessionLaps
+                .filter { $0.id != lap.id }
+                .sorted { $0.lapNumber < $1.lapNumber }
+            let selectedComparisonLap = comparisonOptions.first(where: { $0.id == comparisonLapID })
+            let comparisonTelemetryData = selectedComparisonLap.map { telemetrySamples(for: $0) }
             
             ZStack {
                 LinearGradient(
@@ -35,6 +41,11 @@ struct LapView: View {
                         telemetrySection(
                             samples: telemetryData.samples,
                             isPlaceholder: telemetryData.isPlaceholder,
+                            comparisonSamples: comparisonTelemetryData?.samples ?? [],
+                            comparisonIsPlaceholder: comparisonTelemetryData?.isPlaceholder ?? false,
+                            comparisonLap: selectedComparisonLap,
+                            comparisonOptions: comparisonOptions,
+                            comparisonSelection: $comparisonLapID,
                             theme: theme,
                             layout: layout
                         )
@@ -169,6 +180,11 @@ struct LapView: View {
     private func telemetrySection(
         samples: [LapTelemetrySample],
         isPlaceholder: Bool,
+        comparisonSamples: [LapTelemetrySample],
+        comparisonIsPlaceholder: Bool,
+        comparisonLap: LapSummary?,
+        comparisonOptions: [LapSummary],
+        comparisonSelection: Binding<UUID?>,
         theme: TeamTheme,
         layout: LapDetailLayout
     ) -> some View {
@@ -177,6 +193,18 @@ struct LapView: View {
                 Label("Lap Telemetry", systemImage: "waveform.path.ecg")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.8))
+                
+                if comparisonOptions.isEmpty {
+                    Text("Log another lap to unlock telemetry overlays.")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.6))
+                } else {
+                    comparisonPicker(
+                        options: comparisonOptions,
+                        selection: comparisonSelection,
+                        activeLap: comparisonLap
+                    )
+                }
                 
                 if samples.isEmpty {
                     ChartPlaceholder(
@@ -187,15 +215,27 @@ struct LapView: View {
                     let metrics = TelemetryMetric.allMetrics(theme: theme)
                     LazyVGrid(columns: layout.telemetryColumns, spacing: 18) {
                         ForEach(metrics) { metric in
-                            telemetryChart(metric: metric, samples: samples)
+                            telemetryChart(
+                                metric: metric,
+                                samples: samples,
+                                comparisonSamples: comparisonSamples,
+                                comparisonLap: comparisonLap
+                            )
                         }
+                    }
+                    
+                    if let comparisonLap, !comparisonSamples.isEmpty {
+                        comparisonLegend(for: comparisonLap)
                     }
                 }
                 
-                let message = isPlaceholder
-                ? "We'll render real traces once telemetry packets are persisted per lap. Showing a synthetic curve for now."
-                : "This trace was recorded live on Lap \(lap.lapNumber)."
-                Text(message)
+                Text(
+                    telemetryFooterMessage(
+                        isPlaceholder: isPlaceholder,
+                        comparisonLap: comparisonLap,
+                        comparisonIsPlaceholder: comparisonIsPlaceholder
+                    )
+                )
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.6))
             }
@@ -203,21 +243,113 @@ struct LapView: View {
     }
     
     @ViewBuilder
-    private func telemetryChart(metric: TelemetryMetric, samples: [LapTelemetrySample]) -> some View {
+    private func comparisonPicker(
+        options: [LapSummary],
+        selection: Binding<UUID?>,
+        activeLap: LapSummary?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Compare Against", systemImage: "rectangle.on.rectangle.angled")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                Spacer()
+                if selection.wrappedValue != nil {
+                    Button("Clear") {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            selection.wrappedValue = nil
+                        }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .buttonStyle(.plain)
+                }
+            }
+            
+            Picker("Compare Against", selection: selection) {
+                Text("None").tag(UUID?.none)
+                ForEach(options, id: \.id) { option in
+                    Text(lapOptionTitle(for: option))
+                        .tag(Optional(option.id))
+                }
+            }
+            .pickerStyle(.menu)
+            
+            Text(
+                activeLap.map { "Overlaying \(lapOptionTitle(for: $0))." }
+                ?? "Select another lap to overlay on these telemetry traces."
+            )
+            .font(.caption2)
+            .foregroundStyle(.white.opacity(0.6))
+        }
+        .padding(12)
+        .background(
+            Color.white.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+    }
+    
+    @ViewBuilder
+    private func comparisonLegend(for comparisonLap: LapSummary) -> some View {
+        HStack(spacing: 12) {
+            legendLine(dashed: false)
+            Text("Lap \(lap.lapNumber)")
+            legendLine(dashed: true)
+            Text("Lap \(comparisonLap.lapNumber)")
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.white.opacity(0.65))
+        .padding(.top, 4)
+    }
+    
+    private func legendLine(dashed: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .stroke(style: StrokeStyle(lineWidth: 3, dash: dashed ? [6, 4] : []))
+            .frame(width: 34, height: 6)
+            .foregroundStyle(.white.opacity(dashed ? 0.55 : 0.9))
+    }
+    
+    @ViewBuilder
+    private func telemetryChart(
+        metric: TelemetryMetric,
+        samples: [LapTelemetrySample],
+        comparisonSamples: [LapTelemetrySample],
+        comparisonLap: LapSummary?
+    ) -> some View {
+        let primarySamples = samples.sorted { $0.distance < $1.distance }
+        let comparisonSorted = comparisonSamples.sorted { $0.distance < $1.distance }
+        let primaryLabel = "Lap \(lap.lapNumber)"
+        let comparisonLabel = comparisonLap.map { "Lap \($0.lapNumber)" }
+        
         VStack(alignment: .leading, spacing: 10) {
             Label(metric.label, systemImage: metric.icon)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.8))
             
             Chart {
-                ForEach(samples) { sample in
+                ForEach(primarySamples) { sample in
                     LineMark(
                         x: .value("Lap %", sample.distance * 100),
-                        y: .value(metric.label, metric.value(from: sample))
+                        y: .value(metric.label, metric.value(from: sample)),
+                        series: .value("Lap", primaryLabel)
                     )
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(metric.color)
                     .lineStyle(.init(lineWidth: 2.5))
+                }
+                
+                if let comparisonLap, !comparisonSorted.isEmpty, let comparisonLabel {
+                    ForEach(comparisonSorted) { sample in
+                        LineMark(
+                            x: .value("Lap %", sample.distance * 100),
+                            y: .value(metric.label, metric.value(from: sample)),
+                            series: .value("Lap", comparisonLabel)
+                        )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(metric.color.opacity(0.55))
+                        .lineStyle(.init(lineWidth: 2, dash: [6, 4]))
+                        .accessibilityLabel("Lap \(comparisonLap.lapNumber)")
+                    }
                 }
             }
             .chartYAxis {
@@ -257,6 +389,32 @@ struct LapView: View {
     
     private var vehicleLabel: String {
         "#\(vehicleDisplayNumber)"
+    }
+    
+    private func lapOptionTitle(for summary: LapSummary) -> String {
+        "Lap \(summary.lapNumber) • Car #\(Int(summary.vehicleIndex) + 1) • \(summary.isValid ? "Valid" : "Invalid")"
+    }
+    
+    private func telemetryFooterMessage(
+        isPlaceholder: Bool,
+        comparisonLap: LapSummary?,
+        comparisonIsPlaceholder: Bool
+    ) -> String {
+        var messages: [String] = [
+            isPlaceholder
+            ? "We'll render real traces once telemetry packets are persisted per lap. Showing a synthetic curve for now."
+            : "This trace was recorded live on Lap \(lap.lapNumber)."
+        ]
+        
+        if let comparisonLap {
+            let comparisonText = comparisonIsPlaceholder
+            ? "Lap \(comparisonLap.lapNumber)'s overlay is still synthetic until telemetry packets are saved."
+            : "Overlay shows recorded telemetry from Lap \(comparisonLap.lapNumber)."
+            messages.append(comparisonText)
+            messages.append("Solid line = Lap \(lap.lapNumber), dashed line = Lap \(comparisonLap.lapNumber).")
+        }
+        
+        return messages.joined(separator: " ")
     }
     
     private func bestLap(in laps: [LapSummary]) -> LapSummary? {
