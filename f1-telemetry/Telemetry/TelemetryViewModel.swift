@@ -36,7 +36,7 @@ extension Double {
 class TelemetryViewModel: ObservableObject {
     private let historyLimit = 160
     // MARK: - Persistence Toggle
-    private let persistenceEnabled = false // Set to true to re-enable SwiftData saves
+    private let persistenceEnabled = true // Persist sessions, laps, and telemetry traces
     
     // MARK: - Published Properties
     
@@ -77,6 +77,7 @@ class TelemetryViewModel: ObservableObject {
     @Published var fuelRemainingLaps: Double = 0
     @Published var tyreCompound: String = "Unknown"
     @Published var tyreAge: Int = 0
+    @Published var nextStrategyTyre: String = "TBD"
     @Published var ersStoreEnergy: Double = 0
     @Published var ersDeployMode: String = "None"
 
@@ -118,6 +119,7 @@ class TelemetryViewModel: ObservableObject {
     @Published var sector2Time: String = "--:--.---"
     @Published var deltaToLeader: String = "+0.000"
     @Published var deltaToFront: String = "+0.000"
+    @Published var deltaToBehind: String = "+0.000"
     @Published var lapDistance: Double = 0
     
     // Connection Status
@@ -129,6 +131,7 @@ class TelemetryViewModel: ObservableObject {
 
     // Player
     @Published var playerCarIndex: Int = 0
+    @Published var playerTeamId: UInt8?
 
     // Session Identifiers
     @Published var sessionUID: String = "No session"
@@ -139,6 +142,9 @@ class TelemetryViewModel: ObservableObject {
     @Published private(set) var brakeHistory: [TelemetryPoint] = []
     @Published private(set) var lateralGHistory: [TelemetryPoint] = []
     @Published private(set) var longitudinalGHistory: [TelemetryPoint] = []
+    private var lapTelemetrySamples: [LapTelemetrySample] = []
+    private var lapSectorTimes: [Int: SectorTimes] = [:]
+    private var lapValidity: [Int: Bool] = [:]
 
     // Session Info
     @Published var weather: UInt8 = 0 // 0 = clear
@@ -239,6 +245,12 @@ class TelemetryViewModel: ObservableObject {
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
                 self.recordInputSnapshot()
+                self.captureLapTelemetrySample(
+                    speed: Double(telemetry.speed),
+                    throttle: Double(telemetry.throttle) * 100,
+                    brake: Double(telemetry.brake) * 100,
+                    gear: Int(telemetry.gear)
+                )
                 
                 // Log first packet received
                 if previousPackets == 0 && self.packetsReceived > 0 {
@@ -270,9 +282,12 @@ class TelemetryViewModel: ObservableObject {
             DispatchQueue.main.async {
                 print("🔄 Updating UI with lap data...")
                 let previousLap = self.currentLap
-                self.currentLap = Int(lapData.currentLapNum)
+                let latestLapNumber = Int(lapData.currentLapNum)
+                self.currentLap = latestLapNumber
                 self.position = Int(lapData.carPosition)
                 self.lapDistance = Double(lapData.lapDistance)
+                
+                self.recordSectorTimes(from: lapData)
                 
                 // Format times
                 self.lastLapTime = self.formatLapTime(lapData.lastLapTimeInMS)
@@ -282,30 +297,36 @@ class TelemetryViewModel: ObservableObject {
                 
                 // Delta to leader
                 let leaderTotalMs = Int(lapData.deltaToRaceLeaderMinutes) * 60000 + Int(lapData.deltaToRaceLeaderInMS)
-                let leaderSeconds = Double(leaderTotalMs) / 1000.0
-                if leaderTotalMs == 0 {
-                    self.deltaToLeader = "+0.000"
-                } else {
-                    self.deltaToLeader = String(format: "+%.3f", leaderSeconds)
-                }
+                self.deltaToLeader = self.formattedGap(fromMilliseconds: leaderTotalMs)
 
                 // Delta to car in front
                 let frontTotalMs = Int(lapData.deltaToCarInFrontMinutes) * 60000 + Int(lapData.deltaToCarInFrontInMS)
-                let frontSeconds = Double(frontTotalMs) / 1000.0
-                if frontTotalMs == 0 {
-                    self.deltaToFront = "+0.000"
-                } else {
-                    self.deltaToFront = String(format: "+%.3f", frontSeconds)
-                }
+                self.deltaToFront = self.formattedGap(fromMilliseconds: frontTotalMs)
+                
+                // Delta to car behind
+                self.deltaToBehind = self.gapToCarBehind(
+                    in: packet.lapData,
+                    playerPosition: Int(lapData.carPosition),
+                    playerLeaderMs: leaderTotalMs
+                )
                 
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
                 
                 // Log lap changes
-                if previousLap > 0 && self.currentLap != previousLap {
-                    print("🏁 Lap \(previousLap) completed! Last lap time: \(self.lastLapTime)")
-                    print("   Now on lap \(self.currentLap), Position: P\(self.position)")
-                    self.persistLapSummary(lapData, header: packet.header)
+                if previousLap > 0 && latestLapNumber != previousLap {
+                    let completedLapNumber = Int16(previousLap)
+                    print("🏁 Lap \(completedLapNumber) completed! Last lap time: \(self.lastLapTime)")
+                    print("   Now on lap \(latestLapNumber), Position: P\(self.position)")
+                    let sectorSnapshot = self.lapSectorTimes.removeValue(forKey: previousLap)
+                    let lapValidSnapshot = self.lapValidity.removeValue(forKey: previousLap) ?? true
+                    self.persistLapSummary(
+                        lapData,
+                        header: packet.header,
+                        completedLapNumber: completedLapNumber,
+                        sectorTimes: sectorSnapshot,
+                        lapIsValid: lapValidSnapshot
+                    )
                 }
                 
                 print("✅ UI update complete - Lap: \(self.currentLap), Position: P\(self.position)")
@@ -377,6 +398,13 @@ class TelemetryViewModel: ObservableObject {
                 self.updateSessionInfo(from: packet.header)
                 self.updateLastPacketTimestamp()
                 self.persistSessionIfNeeded(header: packet.header)
+                self.updateSessionRecord(
+                    uid: packet.header.sessionUID,
+                    weather: packet.weather,
+                    trackTemp: packet.trackTemperature,
+                    airTemp: packet.airTemperature,
+                    totalLaps: packet.totalLaps
+                )
             }
         }
 
@@ -405,8 +433,12 @@ class TelemetryViewModel: ObservableObject {
         // Participants
         telemetryListener.onParticipantsReceived = { [weak self] packet in
             DispatchQueue.main.async {
-                self?.activeCars = Int(packet.numActiveCars)
-                self?.participants = packet.participants
+                guard let self = self else { return }
+                self.activeCars = Int(packet.numActiveCars)
+                self.participants = packet.participants
+                let playerIndex = Int(packet.header.playerCarIndex)
+                self.playerCarIndex = playerIndex
+                self.updatePlayerTeam(with: playerIndex)
             }
         }
 
@@ -455,12 +487,12 @@ class TelemetryViewModel: ObservableObject {
     // MARK: - Private Helpers
     private func startConnectionMonitoring() {
         connectionCheckTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            let timeSinceUpdate = Date().timeIntervalSince(self.lastUpdateTime)
-            let wasConnected = self.isConnected
-            let nowConnected = timeSinceUpdate < 3.0 && self.telemetryListener.isListening
-            
-            DispatchQueue.main.async {
+            Task { @MainActor in
+                guard let self else { return }
+                let timeSinceUpdate = Date().timeIntervalSince(self.lastUpdateTime)
+                let wasConnected = self.isConnected
+                let nowConnected = timeSinceUpdate < 3.0 && self.telemetryListener.isListening
+                
                 if wasConnected != nowConnected {
                     if nowConnected {
                         print("✅ Telemetry CONNECTED - Receiving data from F1 game")
@@ -531,6 +563,19 @@ class TelemetryViewModel: ObservableObject {
                 print("🎮 Session started: \(newSessionUID)")
             }
             sessionUID = newSessionUID
+            lapTelemetrySamples.removeAll()
+            lapSectorTimes.removeAll()
+            lapValidity.removeAll()
+        }
+        updatePlayerTeam()
+    }
+
+    private func updatePlayerTeam(with playerIndex: Int? = nil) {
+        let index = playerIndex ?? playerCarIndex
+        guard participants.indices.contains(index) else { return }
+        let detectedTeam = participants[index].teamId
+        if playerTeamId != detectedTeam {
+            playerTeamId = detectedTeam
         }
     }
     
@@ -547,6 +592,62 @@ class TelemetryViewModel: ObservableObject {
         lastPacketTimestamp = String(format: "%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds)
     }
     
+    private func captureLapTelemetrySample(speed: Double, throttle: Double, brake: Double, gear: Int) {
+        guard persistenceEnabled else { return }
+        guard trackLength > 0 else { return }
+        let lapProgress = max(0, min(1, lapDistance / Double(trackLength)))
+        let sample = LapTelemetrySample(
+            distance: lapProgress,
+            speed: speed,
+            throttle: throttle,
+            brake: brake,
+            gear: Double(gear)
+        )
+        lapTelemetrySamples.append(sample)
+    }
+    
+    private func recordSectorTimes(from lapData: LapData) {
+        let lapIndex = Int(lapData.currentLapNum)
+        guard lapIndex > 0 else { return }
+        
+        var snapshot = lapSectorTimes[lapIndex] ?? SectorTimes()
+        let s1 = combinedSectorTime(minutes: lapData.sector1TimeMinutes, milliseconds: lapData.sector1TimeInMS)
+        if s1 > 0 {
+            snapshot.sector1 = s1
+        }
+        let s2 = combinedSectorTime(minutes: lapData.sector2TimeMinutes, milliseconds: lapData.sector2TimeInMS)
+        if s2 > 0 {
+            snapshot.sector2 = s2
+        }
+        lapSectorTimes[lapIndex] = snapshot
+        lapValidity[lapIndex] = (lapData.currentLapInvalid == 0)
+    }
+    
+    private func combinedSectorTime(minutes: UInt8, milliseconds: UInt16) -> Int32 {
+        Int32(minutes) * 60_000 + Int32(milliseconds)
+    }
+    
+    private func formattedGap(fromMilliseconds value: Int) -> String {
+        guard value > 0 else { return "+0.000" }
+        return String(format: "+%.3f", Double(value) / 1000.0)
+    }
+    
+    private func gapToCarBehind(
+        in lapDataArray: [LapData],
+        playerPosition: Int,
+        playerLeaderMs: Int
+    ) -> String {
+        let targetPosition = playerPosition + 1
+        guard targetPosition <= 22 else { return "+0.000" }
+        guard let carBehind = lapDataArray.first(where: { Int($0.carPosition) == targetPosition }) else {
+            return "+0.000"
+        }
+        let behindLeaderMs = Int(carBehind.deltaToRaceLeaderMinutes) * 60000 + Int(carBehind.deltaToRaceLeaderInMS)
+        let gapMs = behindLeaderMs - playerLeaderMs
+        guard gapMs > 0 else { return "+0.000" }
+        return formattedGap(fromMilliseconds: gapMs)
+    }
+    
     private func persistSessionIfNeeded(header: PacketHeader) {
         guard persistenceEnabled else { return }
         guard header.sessionUID != 0 else { return }
@@ -556,7 +657,15 @@ class TelemetryViewModel: ObservableObject {
             let fetch = FetchDescriptor<RaceSession>(predicate: #Predicate { $0.sessionUID == uid })
             let results = try context.fetch(fetch)
             if results.isEmpty {
-                let session = RaceSession(sessionUID: uid, sessionType: Int16(sessionType), trackId: Int16(trackId))
+                let session = RaceSession(
+                    sessionUID: uid,
+                    sessionType: Int16(sessionType),
+                    trackId: Int16(trackId),
+                    weatherCode: Int16(weather),
+                    trackTemperature: Int16(trackTemp),
+                    airTemperature: Int16(airTemp),
+                    totalLapsPlanned: Int16(totalLapsSession)
+                )
                 context.insert(session)
                 try context.save()
                 persistedSessions.insert(uid)
@@ -565,6 +674,30 @@ class TelemetryViewModel: ObservableObject {
             }
         } catch {
             print("❌ Failed to persist session: \(error)")
+        }
+    }
+    
+    private func updateSessionRecord(
+        uid: UInt64,
+        weather: UInt8,
+        trackTemp: Int8,
+        airTemp: Int8,
+        totalLaps: UInt8
+    ) {
+        guard persistenceEnabled else { return }
+        guard uid != 0 else { return }
+        
+        do {
+            let fetch = FetchDescriptor<RaceSession>(predicate: #Predicate { $0.sessionUID == uid })
+            if let session = try context.fetch(fetch).first {
+                session.weatherCode = Int16(weather)
+                session.trackTemperature = Int16(trackTemp)
+                session.airTemperature = Int16(airTemp)
+                session.totalLapsPlanned = Int16(totalLaps)
+                try context.save()
+            }
+        } catch {
+            print("⚠️ Failed to update session metadata: \(error)")
         }
     }
     
@@ -646,7 +779,13 @@ class TelemetryViewModel: ObservableObject {
     }
 
     // Lap Summary
-    private func persistLapSummary(_ lapData: LapData, header: PacketHeader) {
+    private func persistLapSummary(
+        _ lapData: LapData,
+        header: PacketHeader,
+        completedLapNumber: Int16,
+        sectorTimes: SectorTimes?,
+        lapIsValid: Bool
+    ) {
         guard persistenceEnabled else { return }
         // Ensure we have a valid session UID
         guard header.sessionUID != 0 else { return }
@@ -671,11 +810,24 @@ class TelemetryViewModel: ObservableObject {
         guard let session = session else { return }
         
         // 2. Build LapSummary from the supplied LapData
-        let s1 = Int32(lapData.sector1TimeInMS)
-        let s2 = Int32(lapData.sector2TimeInMS)
         let lapTime = Int32(lapData.lastLapTimeInMS)
-        let s3 = lapTime - s1 - s2
-        let completedLapNumber = Int16(lapData.currentLapNum) - 1 // previous lap just completed
+        guard lapTime > 0 else {
+            print("⚠️ Skipping lap save: lap time was 0 (lap \(completedLapNumber))")
+            return
+        }
+        
+        var s1 = sectorTimes?.sector1 ?? 0
+        var s2 = sectorTimes?.sector2 ?? 0
+        
+        if s1 == 0 {
+            s1 = combinedSectorTime(minutes: lapData.sector1TimeMinutes, milliseconds: lapData.sector1TimeInMS)
+        }
+        if s2 == 0 {
+            s2 = combinedSectorTime(minutes: lapData.sector2TimeMinutes, milliseconds: lapData.sector2TimeInMS)
+        }
+        
+        let rawS3 = lapTime - s1 - s2
+        let s3 = rawS3 >= 0 ? rawS3 : max(lapTime - s1, 0)
         let summary = LapSummary(session: session,
                                  vehicleIndex: Int16(header.playerCarIndex),
                                  lapNumber: completedLapNumber,
@@ -683,7 +835,15 @@ class TelemetryViewModel: ObservableObject {
                                  s1: s1,
                                  s2: s2,
                                  s3: s3,
-                                 valid: lapData.currentLapInvalid == 0)
+                                 valid: lapIsValid)
+        
+        if !lapTelemetrySamples.isEmpty {
+            let orderedSamples = lapTelemetrySamples.sorted { $0.distance < $1.distance }
+            let trace = LapTelemetryTrace(lap: summary, samples: orderedSamples)
+            summary.telemetryTrace = trace
+            context.insert(trace)
+        }
+        lapTelemetrySamples.removeAll()
         
         // 3. Persist
         context.insert(summary)
@@ -726,5 +886,10 @@ extension TelemetryViewModel {
             history.removeFirst(history.count - historyLimit)
         }
     }
+}
+
+private struct SectorTimes {
+    var sector1: Int32 = 0
+    var sector2: Int32 = 0
 }
 

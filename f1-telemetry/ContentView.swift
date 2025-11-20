@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 
 struct ContentView: View {
     @StateObject private var viewModel = TelemetryViewModel()
@@ -29,6 +30,10 @@ struct ContentView: View {
         }
         .onDisappear {
             viewModel.stopListening()
+        }
+        .onReceive(viewModel.$playerTeamId.compactMap { $0 }) { teamId in
+            let theme = TeamTheme.theme(forTeamId: teamId)
+            themeManager.select(theme)
         }
     }
 

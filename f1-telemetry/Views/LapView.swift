@@ -18,7 +18,7 @@ struct LapView: View {
                 driverFastest: driverFastest,
                 sessionFastest: sessionFastest
             )
-            let telemetrySamples = telemetrySamples(for: lap)
+            let telemetryData = telemetrySamples(for: lap)
             
             ZStack {
                 LinearGradient(
@@ -33,7 +33,8 @@ struct LapView: View {
                         overviewCard(theme: theme)
                         comparisonMatrixCard(entries: comparisonEntries, theme: theme)
                         telemetrySection(
-                            samples: telemetrySamples,
+                            samples: telemetryData.samples,
+                            isPlaceholder: telemetryData.isPlaceholder,
                             theme: theme,
                             layout: layout
                         )
@@ -167,6 +168,7 @@ struct LapView: View {
     @ViewBuilder
     private func telemetrySection(
         samples: [LapTelemetrySample],
+        isPlaceholder: Bool,
         theme: TeamTheme,
         layout: LapDetailLayout
     ) -> some View {
@@ -190,7 +192,10 @@ struct LapView: View {
                     }
                 }
                 
-                Text("Hook these charts up to real lap traces by persisting telemetry packets per lap. Currently showing a synthesized profile based on lap time.")
+                let message = isPlaceholder
+                ? "We'll render real traces once telemetry packets are persisted per lap. Showing a synthetic curve for now."
+                : "This trace was recorded live on Lap \(lap.lapNumber)."
+                Text(message)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.6))
             }
@@ -260,8 +265,11 @@ struct LapView: View {
             .min(by: { $0.lapTimeMS < $1.lapTimeMS })
     }
     
-    private func telemetrySamples(for lap: LapSummary) -> [LapTelemetrySample] {
-        LapTelemetrySample.placeholders(for: lap)
+    private func telemetrySamples(for lap: LapSummary) -> (samples: [LapTelemetrySample], isPlaceholder: Bool) {
+        if let samples = lap.telemetryTrace?.decodedSamples(), !samples.isEmpty {
+            return (samples, false)
+        }
+        return (LapTelemetrySample.placeholderSeries(lapTimeMS: lap.lapTimeMS), true)
     }
 }
 
@@ -393,35 +401,6 @@ private struct ComparisonValueCell: View {
             return theme.brakeColor
         default:
             return .white.opacity(0.8)
-        }
-    }
-}
-
-private struct LapTelemetrySample: Identifiable {
-    let id = UUID()
-    let distance: Double
-    let speed: Double
-    let throttle: Double
-    let brake: Double
-    let gear: Double
-    
-    static func placeholders(for lap: LapSummary, resolution: Int = 64) -> [LapTelemetrySample] {
-        guard resolution > 1 else { return [] }
-        return (0..<resolution).map { index in
-            let progress = Double(index) / Double(resolution - 1)
-            let accel = sin(progress * .pi)
-            let corner = sin(progress * .pi * 1.4 + .pi / 4)
-            let speed = max(80, 90 + accel * 190 - abs(corner) * 20)
-            let throttle = min(100, max(0, accel * 95 + cos(progress * .pi * 2) * 8))
-            let brake = min(100, max(0, (1 - accel * 0.7) * abs(corner) * 90))
-            let gear = max(1, min(8, round(progress * 8)))
-            return LapTelemetrySample(
-                distance: progress,
-                speed: speed,
-                throttle: throttle,
-                brake: brake,
-                gear: gear
-            )
         }
     }
 }

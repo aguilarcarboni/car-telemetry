@@ -228,6 +228,23 @@ enum TeamTheme: String, CaseIterable, Identifiable {
             ]
         }
     }
+
+    static func theme(forTeamId teamId: UInt8) -> TeamTheme {
+        switch teamId {
+        case 2:
+            return .redBull
+        case 1:
+            return .ferrari
+        case 0:
+            return .mercedes
+        case 8:
+            return .mclaren
+        case 4:
+            return .astonMartin
+        default:
+            return .neutral
+        }
+    }
 }
 
 final class ThemeManager: ObservableObject {

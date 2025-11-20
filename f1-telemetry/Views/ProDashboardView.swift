@@ -13,6 +13,8 @@ struct ProDashboardView: View {
     @ObservedObject var viewModel: TelemetryViewModel
     @EnvironmentObject private var themeManager: ThemeManager
     
+    private let chartTimeWindow: TimeInterval = 20
+    
     var body: some View {
         GeometryReader { proxy in
             let layout = DashboardLayoutMetrics(size: proxy.size)
@@ -128,47 +130,66 @@ struct ProDashboardView: View {
     }
     
     private var statsSection: some View {
-        TelemetryCard {
-            VStack(spacing: 18) {
-                HStack(spacing: 18) {
-                    FillBarMetricCard(
-                        title: "Speed",
-                        icon: "speedometer",
-                        value: currentSpeedValue,
-                        color: selectedTeam.speedColor, maxValue: speedGaugeMax,
-                        valueLabel: "\(Int(viewModel.speed.safeInt())) km/h"
-                    )
+        VStack(spacing: 18) {
+
+            TelemetryCard {
+                VStack(spacing: 18) {
+                    HStack(spacing: 18) {
+                        FillBarMetricCard(
+                            title: "Speed",
+                            icon: "speedometer",
+                            value: currentSpeedValue,
+                            color: selectedTeam.speedColor, maxValue: speedGaugeMax,
+                            valueLabel: "\(Int(viewModel.speed.safeInt())) km/h"
+                        )
+                        
+                        FillBarMetricCard(
+                            title: "Revs",
+                            icon: "dial.medium",
+                            value: currentRPMValue,
+                            color: selectedTeam.accent, maxValue: rpmGaugeMax,
+                            valueLabel: "\(Int(viewModel.rpm)) rpm",
+                            highlightFractionRange: 0.9...1.0,
+                            highlightColor: .red
+                        )
+                    }
                     
-                    FillBarMetricCard(
-                        title: "Revs",
-                        icon: "dial.medium",
-                        value: currentRPMValue,
-                        color: selectedTeam.accent, maxValue: rpmGaugeMax,
-                        valueLabel: "\(Int(viewModel.rpm)) rpm",
-                        highlightFractionRange: 0.9...1.0,
-                        highlightColor: .red
-                    )
-                }
-                
-                Divider().background(Color.white.opacity(0.08))
-                
-                HStack(spacing: 18) {
-                    FillBarMetricCard(
-                        title: "Throttle",
-                        icon: "bolt.fill",
-                        value: viewModel.throttle,
-                        color: selectedTeam.throttleColor
-                    )
+                    Divider().background(Color.white.opacity(0.08))
                     
-                    FillBarMetricCard(
-                        title: "Brake",
-                        icon: "hand.raised.fill",
-                        value: viewModel.brake,
-                        color: selectedTeam.brakeColor
-                    )
+                    HStack(spacing: 18) {
+                        FillBarMetricCard(
+                            title: "Throttle",
+                            icon: "bolt.fill",
+                            value: viewModel.throttle,
+                            color: selectedTeam.throttleColor
+                        )
+                        
+                        FillBarMetricCard(
+                            title: "Brake",
+                            icon: "hand.raised.fill",
+                            value: viewModel.brake,
+                            color: selectedTeam.brakeColor
+                        )
+                    }
+
+                    Divider().background(Color.white.opacity(0.08))
+
+                    HStack(spacing: 12) {
+                        StatChip(
+                            label: "Gap Ahead",
+                            value: gapToFrontDisplay,
+                            color: selectedTeam.speedColor
+                        )
+                        StatChip(
+                            label: "Gap Behind",
+                            value: gapToBehindDisplay,
+                            color: selectedTeam.secondaryAccent
+                        )
+                    }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .top)
     }
     
     private var damageSection: some View {
@@ -211,21 +232,25 @@ struct ProDashboardView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.8))
             
-            if viewModel.speedHistory.isEmpty {
+            let data = trimmedHistory(viewModel.speedHistory)
+            
+            if data.isEmpty {
                 ChartPlaceholder(minHeight: height)
-            } else {
+            } else if let domain = chartDomain(for: data) {
                 Chart {
-                    ForEach(viewModel.speedHistory) { point in
+                    ForEach(data) { point in
                         AreaMark(
                             x: .value("Time", point.timestamp),
                             y: .value("Speed", point.value)
                         )
                         .interpolationMethod(.catmullRom)
-                        .foregroundStyle(.linearGradient(
-                            colors: [selectedTeam.speedColor.opacity(0.35), .clear],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ))
+                        .foregroundStyle(
+                            .linearGradient(
+                                colors: [selectedTeam.speedColor.opacity(0.35), .clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
                         
                         LineMark(
                             x: .value("Time", point.timestamp),
@@ -236,11 +261,14 @@ struct ProDashboardView: View {
                         .lineStyle(.init(lineWidth: 3))
                     }
                 }
+                .chartXScale(domain: domain)
                 .chartYAxis {
                     AxisMarks(position: .leading)
                 }
                 .chartXAxis(.hidden)
                 .frame(height: height)
+            } else {
+                ChartPlaceholder(minHeight: height)
             }
         }
     }
@@ -258,14 +286,16 @@ struct ProDashboardView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.8))
             
-            if history.isEmpty {
+            let data = trimmedHistory(history)
+            
+            if data.isEmpty {
                 ChartPlaceholder(
                     message: "Waiting for \(label.lowercased()) data",
                     minHeight: height
                 )
-            } else {
+            } else if let domain = chartDomain(for: data) {
                 Chart {
-                    ForEach(history) { point in
+                    ForEach(data) { point in
                         AreaMark(
                             x: .value("Time", point.timestamp),
                             y: .value(label, point.value)
@@ -286,12 +316,18 @@ struct ProDashboardView: View {
                         .foregroundStyle(color)
                     }
                 }
+                .chartXScale(domain: domain)
                 .chartYScale(domain: 0...100)
                 .chartYAxis {
                     AxisMarks(values: Array(stride(from: 0, through: 100, by: 25)))
                 }
                 .chartXAxis(.hidden)
                 .frame(height: height)
+            } else {
+                ChartPlaceholder(
+                    message: "Waiting for \(label.lowercased()) data",
+                    minHeight: height
+                )
             }
         }
     }
@@ -433,6 +469,21 @@ struct ProDashboardView: View {
         return "\(Int(avg))%"
     }
     
+    private var gapToFrontDisplay: String {
+        let trimmed = viewModel.deltaToFront.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "+0.000" : trimmed
+    }
+    
+    private var gapToBehindDisplay: String {
+        let trimmed = viewModel.deltaToBehind.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "+0.000" : trimmed
+    }
+    
+    private var nextStrategyTyreDisplay: String {
+        let trimmed = viewModel.nextStrategyTyre.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "TBD" : trimmed
+    }
+    
     private var gForceMagnitude: String {
         let magnitude = hypot(viewModel.gLat, viewModel.gLong)
         return String(format: "%.2f g", magnitude)
@@ -449,6 +500,32 @@ struct ProDashboardView: View {
         default:
             return selectedTeam.brakeColor
         }
+    }
+    
+    private func trimmedHistory(_ history: [TelemetryPoint]) -> [TelemetryPoint] {
+        guard let latestTimestamp = history.last?.timestamp else {
+            return []
+        }
+        
+        let cutoff = latestTimestamp.addingTimeInterval(-chartTimeWindow)
+        guard let startIndex = history.firstIndex(where: { $0.timestamp >= cutoff }) else {
+            return history
+        }
+        
+        return Array(history[startIndex...])
+    }
+    
+    private func chartDomain(for history: [TelemetryPoint]) -> ClosedRange<Date>? {
+        guard
+            let firstTimestamp = history.first?.timestamp,
+            let latestTimestamp = history.last?.timestamp
+        else {
+            return nil
+        }
+        
+        let windowStart = latestTimestamp.addingTimeInterval(-chartTimeWindow)
+        let start = max(firstTimestamp, windowStart)
+        return start...latestTimestamp
     }
 }
 
