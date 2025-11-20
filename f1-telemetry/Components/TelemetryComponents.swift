@@ -87,7 +87,7 @@ struct StatChip: View {
 }
 
 struct ChartPlaceholder: View {
-    var message: String = "Waiting for live telemetry"
+    var message: String = "Waiting for speed data"
     var minHeight: CGFloat = 180
     
     var body: some View {

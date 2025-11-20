@@ -134,7 +134,7 @@ struct ProDashboardView: View {
     private var statsSection: some View {
         VStack(spacing: 10) {
             TelemetryCard {
-                VStack(spacing: 10) {
+                VStack(spacing: 18) {
                     HStack(spacing: 5) {
                         
                         handlingBalanceCard
@@ -166,7 +166,7 @@ struct ProDashboardView: View {
     
     @ViewBuilder
     private var rpmGaugeView: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 12) {
             Gauge(value: currentRPMValue, in: 0...max(rpmGaugeMax, 1)) {
                 EmptyView()
             } currentValueLabel: {
@@ -175,6 +175,9 @@ struct ProDashboardView: View {
                     .foregroundStyle(selectedTeam.accent)
             }
             .gaugeStyle(.accessoryCircular)
+            .controlSize(.extraLarge)
+            .frame(maxWidth: .infinity)
+            .aspectRatio(1, contentMode: .fit)
             .tint(
                 Gradient(colors: [
                     selectedTeam.accent,
@@ -182,8 +185,9 @@ struct ProDashboardView: View {
                     .red
                 ])
             )
-            .frame(width: 110, height: 110)
         }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 220)
     }
     
     @ViewBuilder
@@ -199,7 +203,7 @@ struct ProDashboardView: View {
             
             if gForceSamples.isEmpty {
                 ChartPlaceholder(
-                    message: "Waiting for G Force data",
+                    message: "Waiting for g-force data",
                     minHeight: 140
                 )
                 .frame(height: 150)
@@ -248,7 +252,6 @@ struct ProDashboardView: View {
     @ViewBuilder
     private var statChipRow: some View {
         HStack(spacing: 18) {
-            rpmGaugeView
             StatChip(
                 label: "Gap Ahead",
                 value: gapToFrontDisplay,
@@ -263,6 +266,11 @@ struct ProDashboardView: View {
                 label: "Penalties",
                 value: "+\(viewModel.penaltiesSeconds)s",
                 color: viewModel.penaltiesSeconds > 0 ? selectedTeam.brakeColor : .green
+            )
+            StatChip(
+                label: "Total Laps",
+                value: totalLaps,
+                color: .green
             )
         }
     }
@@ -319,6 +327,12 @@ struct ProDashboardView: View {
     private var damageSection: some View {
         TelemetryCard {
             HStack(alignment: .top, spacing: 24) {
+
+                rpmGaugeView
+                
+                Divider()
+                    .background(Color.white.opacity(0.12))
+
                 VStack(spacing: 16) {
                     tyreDamageRow(front: true)
                     
@@ -329,20 +343,6 @@ struct ProDashboardView: View {
                     }
                     
                     tyreDamageRow(front: false)
-                }
-                .frame(maxWidth: .infinity, alignment: .top)
-                
-                Divider()
-                    .background(Color.white.opacity(0.12))
-                
-                VStack(spacing: 16) {
-                    ForEach(structuralDamageMetrics, id: \.label) { metric in
-                        DamageFillBar(
-                            label: metric.label,
-                            value: metric.value,
-                            color: damageColor(for: metric.value)
-                        )
-                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .top)
             }
@@ -525,6 +525,10 @@ struct ProDashboardView: View {
                 longitudinal: longHistory[index].value
             )
         }
+    }
+
+    private var totalLaps: String {
+        return "\(viewModel.totalLapsSession)"
     }
     
     private var tractionCircleBoundaryPoints: [TractionBoundaryPoint] {
