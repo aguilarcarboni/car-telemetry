@@ -35,6 +35,7 @@ extension Double {
 @MainActor
 class TelemetryViewModel: ObservableObject {
     private let historyLimit = 160
+    private let kphToMetersPerSecond: Double = 1000.0 / 3600.0
     private let weatherPersistInterval: TimeInterval = 20
     private let baseChassisMassKg: Double = 798
     private let driverMassKg: Double = 80
@@ -462,10 +463,8 @@ class TelemetryViewModel: ObservableObject {
                 // Update world position
                 self.worldX = Double(m.worldPositionX)
                 self.worldZ = Double(m.worldPositionZ)
-                if packet.wheelSlip.count == 4 {
-                    let rear = (Double(packet.wheelSlip[0]) + Double(packet.wheelSlip[1])) / 2.0
-                    let front = (Double(packet.wheelSlip[2]) + Double(packet.wheelSlip[3])) / 2.0
-                    self.updateHandlingBalance(frontSlip: front, rearSlip: rear)
+                if let slip = self.resolveSlipValues(from: packet) {
+                    self.updateHandlingBalance(frontSlip: slip.front, rearSlip: slip.rear)
                 } else {
                     self.updateHandlingBalance(frontSlip: 0, rearSlip: 0)
                 }
@@ -752,6 +751,37 @@ class TelemetryViewModel: ObservableObject {
         let gripFactor = min(1.0, max(0.2, gMagnitude / 2.8))
         handlingConfidence = normalizedSlip * steeringFactor * gripFactor
         recordHandlingSnapshot(frontSlip: frontSlip, rearSlip: rearSlip)
+    }
+    
+    private func resolveSlipValues(from packet: PacketMotionData) -> (front: Double, rear: Double)? {
+        if let values = slipValues(from: packet.wheelSlip) {
+            return values
+        }
+        if let fallback = slipValuesFromWheelSpeed(packet.wheelSpeed) {
+            return fallback
+        }
+        return nil
+    }
+    
+    private func slipValues(from rawValues: [Float]) -> (front: Double, rear: Double)? {
+        guard rawValues.count == 4 else { return nil }
+        let slips = rawValues.map { Double($0) }
+        let maxMagnitude = slips.map { abs($0) }.max() ?? 0
+        guard maxMagnitude > 0.0005 else { return nil }
+        let rear = (slips[0] + slips[1]) / 2.0
+        let front = (slips[2] + slips[3]) / 2.0
+        return (front, rear)
+    }
+    
+    private func slipValuesFromWheelSpeed(_ speeds: [Float]) -> (front: Double, rear: Double)? {
+        guard speeds.count == 4 else { return nil }
+        let carSpeedMS = speed * kphToMetersPerSecond
+        guard carSpeedMS > 2.0 else { return nil }
+        let normalized = speeds.map { Double($0) / carSpeedMS - 1.0 }
+        guard normalized.allSatisfy({ $0.isFinite }) else { return nil }
+        let rear = (normalized[0] + normalized[1]) / 2.0
+        let front = (normalized[2] + normalized[3]) / 2.0
+        return (front, rear)
     }
     
     private func persistSessionIfNeeded(header: PacketHeader) {

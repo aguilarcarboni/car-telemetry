@@ -162,55 +162,40 @@ struct PacketMotionData {
             return value
         }
 
-        func readFloatArray(count: Int) -> [Float]? {
+        func readFloatArray(count: Int) -> [Float] {
             var values: [Float] = []
             values.reserveCapacity(count)
             for _ in 0..<count {
-                guard let value = readFloat() else { return nil }
+                guard let value = readFloat() else { break }
                 values.append(value)
+            }
+            if values.count < count {
+                values.append(contentsOf: Array(repeating: 0, count: count - values.count))
             }
             return values
         }
 
-        guard
-            let suspensionPos = readFloatArray(count: 4),
-            let suspensionVel = readFloatArray(count: 4),
-            let suspensionAccel = readFloatArray(count: 4),
-            let wheelSpeedArray = readFloatArray(count: 4),
-            let wheelSlipArray = readFloatArray(count: 4),
-            let localVelX = readFloat(),
-            let localVelY = readFloat(),
-            let localVelZ = readFloat(),
-            let angularVelX = readFloat(),
-            let angularVelY = readFloat(),
-            let angularVelZ = readFloat(),
-            let angularAccX = readFloat(),
-            let angularAccY = readFloat(),
-            let angularAccZ = readFloat(),
-            let frontAngle = readFloat(),
-            let frontAngularVelocity = readFloat(),
-            let rearAngularVelocity = readFloat()
-        else {
-            return nil
-        }
+        suspensionPosition = readFloatArray(count: 4)
+        suspensionVelocity = readFloatArray(count: 4)
+        suspensionAcceleration = readFloatArray(count: 4)
+        wheelSpeed = readFloatArray(count: 4)
+        wheelSlip = readFloatArray(count: 4)
 
-        suspensionPosition = suspensionPos
-        suspensionVelocity = suspensionVel
-        suspensionAcceleration = suspensionAccel
-        wheelSpeed = wheelSpeedArray
-        wheelSlip = wheelSlipArray
-        localVelocityX = localVelX
-        localVelocityY = localVelY
-        localVelocityZ = localVelZ
-        angularVelocityX = angularVelX
-        angularVelocityY = angularVelY
-        angularVelocityZ = angularVelZ
-        angularAccelerationX = angularAccX
-        angularAccelerationY = angularAccY
-        angularAccelerationZ = angularAccZ
-        frontWheelsAngle = frontAngle
-        frontWheelsAngularVelocity = frontAngularVelocity
-        rearWheelsAngularVelocity = rearAngularVelocity
+        if let localVelX = readFloat() { localVelocityX = localVelX }
+        if let localVelY = readFloat() { localVelocityY = localVelY }
+        if let localVelZ = readFloat() { localVelocityZ = localVelZ }
+
+        if let angularVelX = readFloat() { angularVelocityX = angularVelX }
+        if let angularVelY = readFloat() { angularVelocityY = angularVelY }
+        if let angularVelZ = readFloat() { angularVelocityZ = angularVelZ }
+
+        if let angularAccX = readFloat() { angularAccelerationX = angularAccX }
+        if let angularAccY = readFloat() { angularAccelerationY = angularAccY }
+        if let angularAccZ = readFloat() { angularAccelerationZ = angularAccZ }
+
+        if let frontAngle = readFloat() { frontWheelsAngle = frontAngle }
+        if let frontAngularVelocity = readFloat() { frontWheelsAngularVelocity = frontAngularVelocity }
+        if let rearAngularVelocity = readFloat() { rearWheelsAngularVelocity = rearAngularVelocity }
     }
 }
 
