@@ -49,19 +49,16 @@ struct SettingsView: View {
                     .foregroundStyle(.white.opacity(0.8))
                 
                 HStack(spacing: 12) {
-                    statusIndicator
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(connectionStatusLabel)
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                        Text("IP: \(ipLabel)")
+                    Picker("Source", selection: $viewModel.source) {
+                        ForEach(TelemetrySource.allCases) { source in
+                            Text(source.displayName).tag(source as TelemetrySource)
+                        }
                     }
-                    Spacer()
-                }
-                
-                Divider().background(Color.white.opacity(0.08))
-                
-                HStack(spacing: 12) {
+                    .pickerStyle(MenuPickerStyle())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.08), in: Capsule())
+
                     Button(action: toggleConnection) {
                         Label(
                             viewModel.isConnected ? "Stop Listener" : "Start Listener",

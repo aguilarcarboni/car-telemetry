@@ -9,6 +9,48 @@ import Foundation
 import SwiftUI
 import Combine
 import SwiftData
+import Network
+// Assetto Corsa support
+
+enum TelemetrySource {
+    case f1
+    case assettoCorsa(host: String = "192.168.68.113")
+
+    var displayName: String {
+        switch self {
+        case .f1: return "F1 24"
+        case .assettoCorsa: return "Assetto Corsa"
+        }
+    }
+
+    static var allCases: [TelemetrySource] { [.f1, .assettoCorsa()] }
+}
+
+extension TelemetrySource: Identifiable, CaseIterable {
+    var id: String { displayName }
+}
+
+extension TelemetrySource: Hashable {
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .f1:
+            hasher.combine(0)
+        case .assettoCorsa(let host):
+            hasher.combine(1)
+            hasher.combine(host)
+        }
+    }
+}
+
+extension TelemetrySource: Equatable {
+    static func == (lhs: TelemetrySource, rhs: TelemetrySource) -> Bool {
+        switch (lhs, rhs) {
+        case (.f1, .f1): return true
+        case (.assettoCorsa(let lh), .assettoCorsa(let rh)): return lh == rh
+        default: return false
+        }
+    }
+}
 
 struct TelemetryPoint: Identifiable, Hashable {
     let id = UUID()
@@ -34,14 +76,150 @@ extension Double {
 
 @MainActor
 class TelemetryViewModel: ObservableObject {
+    // MARK: - Constants
     private let historyLimit = 160
     private let kphToMetersPerSecond: Double = 1000.0 / 3600.0
     private let weatherPersistInterval: TimeInterval = 20
     private let baseChassisMassKg: Double = 798
     private let driverMassKg: Double = 80
-    // MARK: - Persistence Toggle
-    private let persistenceEnabled = true // Persist sessions, laps, and telemetry traces
-    
+    private let persistenceEnabled = true
+
+    // Connection monitor
+    private var connectionCheckTimer: Timer?
+    // MARK: - Telemetry Source Handling
+    private var acClient: ACTelemetryClient?
+    private var telemetryListener = TelemetryListener()
+    @Published var source: TelemetrySource = .f1 {
+        didSet {
+            print("🔄 Telemetry source changed to \(source.displayName)")
+            if isConnected {
+                stop()
+                start(source: source)
+            } else {
+                // Not connected yet; just print intended target
+                switch source {
+                case .f1:
+                    print("ℹ️ Will listen for F1 telemetry on port \(port)")
+                case .assettoCorsa(let host):
+                    print("ℹ️ Will connect to Assetto Corsa at \(host):9996")
+                }
+            }
+        }
+    }
+
+    // AC buffering
+    private var acPendingSamples: [LapTelemetrySample] = []
+    private var acCurrentLap: Int32 = -1
+
+    func start(source: TelemetrySource = .f1) {
+        self.source = source
+        print("▶️ Starting telemetry for \(source.displayName)...")
+        switch source {
+        case .f1:
+            telemetryListener.startListening()
+        case .assettoCorsa(let host):
+            let client = ACTelemetryClient(host: host)
+            self.acClient = client
+            setupACCallbacks(client)
+            client.connect()
+        }
+    }
+
+    func stop() {
+        print("⏹️ Stopping telemetry for \(source.displayName)...")
+        switch source {
+        case .f1:
+            telemetryListener.stopListening()
+        case .assettoCorsa:
+            acClient?.disconnect()
+            acClient = nil
+        }
+    }
+
+    private func setupACCallbacks(_ client: ACTelemetryClient) {
+        client.onUpdate = { [weak self] update in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.speed = Double(update.speedKmh)
+                self.rpm = Double(update.engineRPM)
+                self.gear = Int(update.gear)
+                self.throttle = Double(update.gas) * 100.0
+                self.brake = Double(update.brake) * 100.0
+                self.steer = Double(update.steer)
+                self.gLat = Double(update.gHor)
+                self.gLong = Double(update.gFront)
+                self.gVert = Double(update.gVert)
+                self.currentLap = Int(update.lap)
+                self.currentLapTime = self.formatMillis(Int(update.lapTimeMS))
+                self.lastUpdateTime = Date()
+                self.bufferACSample(update)
+                self.recordInputSnapshot()
+                self.recordGForceSnapshot()
+                self.recordHandlingSnapshot(frontSlip: Double(update.frontSlip), rearSlip: Double(update.rearSlip))
+
+                // Debug logging – first 10 updates and every 50 afterwards
+                if self.packetsReceived < 10 || self.packetsReceived % 50 == 0 {
+                    print("📊 AC Update: speed=\(self.speed) kmh, rpm=\(self.rpm), gear=\(self.gear), throttle=\(self.throttle), brake=\(self.brake)")
+                }
+                self.packetsReceived += 1
+            }
+        }
+        client.onLap = { [weak self] lap in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.persistCurrentACLap(finalTime: lap.lapTimeMS, lapNumber: Int(lap.lap))
+            }
+        }
+    }
+
+    // MARK: - AC Buffering & Persistence
+    private func bufferACSample(_ update: RTCarInfo) {
+        // Distance is unknown -> use lap progress percentage approx via samples count
+        let sample = LapTelemetrySample(
+            distance: 0,
+            speed: Double(update.speedKmh),
+            throttle: Double(update.gas) * 100,
+            brake: Double(update.brake) * 100,
+            gear: Double(update.gear),
+            rpm: Double(update.engineRPM),
+            steer: Double(update.steer),
+            lateralG: Double(update.gHor),
+            longitudinalG: Double(update.gFront)
+        )
+        acPendingSamples.append(sample)
+        acCurrentLap = update.lap
+        if acPendingSamples.count >= 5000 {
+            persistCurrentACLap()
+        }
+    }
+
+    private func persistCurrentACLap(finalTime: Int32? = nil, lapNumber: Int? = nil) {
+        guard persistenceEnabled, !acPendingSamples.isEmpty else { return }
+        let ctx = PersistenceController.shared.modelContainer.mainContext
+        do {
+            try ctx.transaction {
+                let lapSummary = LapSummary(
+                    session: nil,
+                    vehicleIndex: 0,
+                    lapNumber: Int16(lapNumber ?? Int(self.acCurrentLap)),
+                    lapTimeMS: finalTime ?? 0)
+                let trace = LapTelemetryTrace(lap: lapSummary, samples: self.acPendingSamples)
+                lapSummary.telemetryTrace = trace
+                self.acPendingSamples.removeAll()
+            }
+        } catch {
+            print("⚠️ Failed to persist AC lap: \(error)")
+        }
+    }
+
+    private func formatMillis(_ ms: Int) -> String {
+        let seconds = ms / 1000
+        let minutes = seconds / 60
+        let secs = seconds % 60
+        let millis = ms % 1000
+        return String(format: "%02d:%02d.%03d", minutes, secs, millis)
+    }
+
     // MARK: - Published Properties
     
     // Car Telemetry
@@ -187,8 +365,6 @@ class TelemetryViewModel: ObservableObject {
     @Published var activeCars: Int = 0
 
     // Loading
-    private let telemetryListener: TelemetryListener
-    private var connectionCheckTimer: Timer?
     private let context: ModelContext
     
     // Keep track of sessions already stored to avoid duplicate inserts
@@ -198,7 +374,6 @@ class TelemetryViewModel: ObservableObject {
         print("🏁 TelemetryViewModel initializing...")
         self.context = context ?? PersistenceController.shared.modelContainer.mainContext
         self.port = port
-        telemetryListener = TelemetryListener(port: port)
         setupCallbacks()
         startConnectionMonitoring()
         getLocalIPAddress()
@@ -515,15 +690,26 @@ class TelemetryViewModel: ObservableObject {
     
     // MARK: - Public Methods
     func startListening() {
-        print("🚀 Starting telemetry listener...")
-        print("📡 Listening on port \(port)")
-        print("🌐 Your device IP: \(localIPAddress)")
-        print("💡 Configure F1 game UDP settings to match these values")
-        telemetryListener.startListening()
+        switch source {
+        case .f1:
+            print("🚀 Starting F1 telemetry listener...")
+            print("📡 Listening on port \(port)")
+            print("🌐 Your device IP: \(localIPAddress)")
+            telemetryListener.startListening()
+        case .assettoCorsa:
+            start(source: source)
+            isConnected = true // will update later on receive
+        }
     }
     
     func stopListening() {
-        telemetryListener.stopListening()
+        switch source {
+        case .f1:
+            telemetryListener.stopListening()
+        case .assettoCorsa:
+            stop()
+            isConnected = false
+        }
     }
     
     func resetHistories() {
@@ -728,7 +914,7 @@ class TelemetryViewModel: ObservableObject {
         }
     }
 
-    private func updateHandlingBalance(frontSlip: Double, rearSlip: Double) {
+    func updateHandlingBalance(frontSlip: Double, rearSlip: Double) {
         wheelSlipFront = frontSlip
         wheelSlipRear = rearSlip
         let slipDelta = frontSlip - rearSlip

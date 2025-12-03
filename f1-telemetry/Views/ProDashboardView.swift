@@ -316,6 +316,10 @@ struct ProDashboardView: View {
                 "Rear": selectedTeam.brakeColor
             ])
             .chartXScale(domain: chartDomain(for: combined) ?? fallbackDomain)
+            // Explicit axes for clearer Slip vs Time representation
+            .chartXAxis {
+                AxisMarks(position: .bottom)
+            }
             .chartYScale(domain: -1.0...1.0)
             .chartYAxis {
                 AxisMarks(values: [-1, -0.5, 0, 0.5, 1])
